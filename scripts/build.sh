@@ -10,7 +10,8 @@
 #                (OPlus HMBIRD 调度类: 以 hmbird 取代 AOSP sched_ext,
 #                 SCHED_EXT -> SCHED_HMBIRD, CONFIG_SCHED_CLASS_EXT ->
 #                 CONFIG_HMBIRD_SCHED, 新增 kernel/sched/hmbird/)
-#   * Root     : FolkSU (KernelSU fork, KERNEL_SU_UAPI_VERSION = 5)
+#   * Root     : FinaSU (KernelSU fork, KERNEL_SU_UAPI_VERSION = 6)
+#                FinaSU = FolkSU 原仓库 (LyraVoid/FinaSU) 改名后的新版本;
 #                并把指定 APK 的签名设为内核侧受信任管理器
 #
 # 用法:  bash scripts/build.sh        (仓库根目录执行)
@@ -31,10 +32,14 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/OnePlusOSS/android_kernel_common_
 KERNEL_BRANCH="${KERNEL_BRANCH:-oneplus/sm8750_b_16.0.0_ace_6}"
 KERNEL_DIR="${KERNEL_DIR:-common}"
 
-FOLKSU_REPO="${FOLKSU_REPO:-https://github.com/LyraVoid/FolkSU.git}"
-# v0.1.0-beta3: 提交数 2787 -> KSU_VERSION = 30000+2787 = 32787 (与管理器 APK 版本号一致)
-FOLKSU_TAG="${FOLKSU_TAG:-v0.1.0-beta3}"
-KSU_EXPECTED_VERSION="${KSU_EXPECTED_VERSION:-32787}"
+# FinaSU/FolkSU 是同一仓库 (github.com/LyraVoid/FinaSU): FolkSU v0.1.0-beta3 之后
+# 项目改名 FinaSU, 并在 v1.0.4 把 KERNEL_SU_UAPI_VERSION 由 5 提到 6。
+# 管理器 (FinaSU_v1.0.4_32960) 会拒绝对接 UAPI=5 的内核 (ksud 报 "UAPI version mismatch"),
+# 所以必须改用 v1.0.4 的内核侧代码重编, 不能沿用 FolkSU 的驱动。
+KSU_REPO="${KSU_REPO:-https://github.com/LyraVoid/FinaSU.git}"
+# v1.0.4: 提交数 2960 -> KSU_VERSION = 30000+2960 = 32960 (与 APK versionCode 32960 一致)
+KSU_TAG="${KSU_TAG:-v1.0.4}"
+KSU_EXPECTED_VERSION="${KSU_EXPECTED_VERSION:-32960}"
 
 APPLY_FENGCHI="${APPLY_FENGCHI:-1}"
 APPLY_SUSFS="${APPLY_SUSFS:-0}"
@@ -72,7 +77,9 @@ TCP_DEFAULT_CONG="${TCP_DEFAULT_CONG:-cubic}"
 USE_REF_CONFIG="${USE_REF_CONFIG:-0}"
 REF_CONFIG_FILE="${REF_CONFIG_FILE:-$REPO_ROOT/configs/ref-6.6.150.config}"
 
-# FolkSU 管理器证书的 (长度, SHA-256), 用 scripts/apk_sign.py 从 APK 提取
+# 管理器证书的 (长度, SHA-256) —— 取自 v2 签名里第一张 certificate (DER) 的 sha256。
+# 实测: FinaSU_v1.0.4_32960-release.apk 的证书 == 旧 FolkSU 管理器的证书 (同一把密钥),
+# 所以沿用 0x2cc/2d89b50a… 即可; 只有换别的管理器时才需要重算。
 KSU_EXPECTED_SIZE="${KSU_EXPECTED_SIZE:-0x2cc}"
 KSU_EXPECTED_HASH="${KSU_EXPECTED_HASH:-2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458}"
 
@@ -201,18 +208,18 @@ else
   warn "APPLY_FENGCHI=0 -> 不打风驰补丁 (将保留 AOSP sched_ext, 无 HMBIRD/风驰)"
 fi
 
-# --------------------------- 3. 集成 FolkSU ----------------------------------
+# --------------------------- 3. 集成 FinaSU ----------------------------------
 if [ "$APPLY_KSU" = "1" ]; then
-log "集成 FolkSU 内核侧代码 (tag $FOLKSU_TAG)"
+log "集成 FinaSU 内核侧代码 (tag $KSU_TAG)"
 KSU_DIR="$PWD/KernelSU"
 if [ ! -d "$KSU_DIR/.git" ]; then
   rm -rf "$KSU_DIR"
   # 需要完整历史: kernel/Kbuild 用 rev-list --count HEAD 计算 KSU_VERSION
-  git clone --quiet "$FOLKSU_REPO" "$KSU_DIR"
+  git clone --quiet "$KSU_REPO" "$KSU_DIR"
 fi
 git -C "$KSU_DIR" fetch --tags --quiet 2>/dev/null || true
-git -C "$KSU_DIR" checkout --quiet "$FOLKSU_TAG" 2>/dev/null \
-  || warn "无法切到 $FOLKSU_TAG, 使用默认分支"
+git -C "$KSU_DIR" checkout --quiet "$KSU_TAG" 2>/dev/null \
+  || warn "无法切到 $KSU_TAG, 使用默认分支"
 KSU_COMMITS="$(git -C "$KSU_DIR" rev-list --count HEAD)"
 KSU_VERSION="$((30000 + KSU_COMMITS))"
 
@@ -222,7 +229,7 @@ grep -qxF '/drivers/kernelsu' .git/info/exclude 2>/dev/null || echo '/drivers/ke
 
 # kernel/include/uapi -> ../../uapi, 在该布局下解析到 KernelSU/uapi
 [ -L KernelSU/kernel/include/uapi ] || ln -sfn ../../uapi KernelSU/kernel/include/uapi
-[ -f KernelSU/kernel/include/uapi/supercall.h ] || die "FolkSU uapi 布局异常"
+[ -f KernelSU/kernel/include/uapi/supercall.h ] || die "FinaSU uapi 布局异常"
 
 # 与 KernelSU 官方 setup.sh 完全相同的接入方式
 ln -sfn ../KernelSU/kernel drivers/kernelsu
@@ -231,9 +238,9 @@ grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig \
   || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
 KSU_UAPI="$(sed -n 's/.*KERNEL_SU_UAPI_VERSION *= *\([0-9]\+\).*/\1/p' KernelSU/uapi/supercall.h | head -1)"
-[ "$KSU_UAPI" = "5" ] || die "FolkSU UAPI=$KSU_UAPI, 与管理器 (uapi: 5) 不匹配"
+[ "$KSU_UAPI" = "6" ] || die "FinaSU UAPI=$KSU_UAPI, 与管理器 (FinaSU 1.0.4, uapi: 6) 不匹配"
 [ "$KSU_VERSION" = "$KSU_EXPECTED_VERSION" ] \
-  || die "KSU_VERSION=$KSU_VERSION != 期望 $KSU_EXPECTED_VERSION (检查 FOLKSU_TAG 是否与管理器 APK 版本对应)"
+  || die "KSU_VERSION=$KSU_VERSION != 期望 $KSU_EXPECTED_VERSION (检查 KSU_TAG 是否与管理器 APK 版本对应)"
 echo "    KERNEL_SU_UAPI_VERSION = $KSU_UAPI"
 echo "    KSU_VERSION = $KSU_VERSION   (管理器 APK 为 $KSU_EXPECTED_VERSION)"
 echo "    受信任管理器证书: size=$KSU_EXPECTED_SIZE sha256=${KSU_EXPECTED_HASH:0:16}..."
@@ -539,7 +546,8 @@ cp "$IMAGE" "$WORKDIR/out/Image"
   echo "KERNEL_REPO=$KERNEL_REPO"
   echo "KERNEL_BRANCH=$KERNEL_BRANCH"
   echo "KERNEL_SOURCE_HEAD=$SRC_HEAD"
-  echo "FOLKSU_TAG=$FOLKSU_TAG"
+  echo "FINASU_REPO=$KSU_REPO"
+  echo "FINASU_TAG=$KSU_TAG"
   echo "KSU_VERSION=${KSU_VERSION:-N/A (未集成 KernelSU)}"
   echo "KSU_UAPI=${KSU_UAPI:-N/A (未集成 KernelSU)}"
   echo "KSU_EXPECTED_SIZE=$KSU_EXPECTED_SIZE"
