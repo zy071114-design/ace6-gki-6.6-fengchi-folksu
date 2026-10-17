@@ -1,7 +1,10 @@
-name: Build Ace6 GKI 6.6 (fengchi + FolkSU)
+name: Build Ace6 GKI 6.6 (fengchi + FinaSU)
 
 # 一加 Ace 6 (PLQ110 / ossi / SM8750 "sun")
-#   GKI 6.6 官方 ace_6 源码 + 风驰内核(HMBIRD/scx) + FolkSU(KernelSU, UAPI=5)
+#   GKI 6.6 官方 ace_6 源码 + 风驰内核(HMBIRD/scx) + FinaSU(KernelSU, UAPI=6)
+#
+# FinaSU 是 FolkSU 原仓库 (github.com/LyraVoid/FinaSU) 改名后的新版本, v1.0.4 把
+# KERNEL_SU_UAPI_VERSION 从 5 提到 6 -> 旧 FolkSU 内核会被管理器拒绝, 必须重编。
 
 on:
   workflow_dispatch:
@@ -11,7 +14,7 @@ on:
         type: boolean
         default: true
       apply_susfs:
-        description: '附加 SuSFS 隐藏补丁 (与 FolkSU 目录结构可能冲突)'
+        description: '附加 SuSFS 隐藏补丁 (与 FinaSU 目录结构可能冲突)'
         type: boolean
         default: false
       apply_ksu:
@@ -64,9 +67,9 @@ on:
         type: string
         default: 'PLQ110/ossi/SM8750'
       ksu_expected_version:
-        description: 'FolkSU KSU_VERSION (须与管理器 APK 版本号一致)'
+        description: 'FinaSU KSU_VERSION (须与管理器 APK 版本号一致; v1.0.4 = 32960)'
         type: string
-        default: '32787'
+        default: '32960'
       localversion:
         description: '内核版本后缀 (默认对齐出厂内核的完整版本串)'
         type: string
@@ -77,11 +80,11 @@ on:
         options: [android, ubuntu]
         default: android
       ksu_expected_size:
-        description: 'FolkSU 管理器证书长度 (十六进制)'
+        description: 'FinaSU 管理器证书长度 (十六进制, v1.0.4 实测 0x2cc)'
         type: string
         default: '0x2cc'
       ksu_expected_hash:
-        description: 'FolkSU 管理器证书 SHA-256'
+        description: 'FinaSU 管理器证书 SHA-256 (v1.0.4 与旧 FolkSU 同一把密钥)'
         type: string
         default: '2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458'
       build_target:
@@ -245,7 +248,7 @@ jobs:
           DEV_TAG="${{ github.event.inputs.device_tag }}"
           export DEV_NAME="${{ github.event.inputs.device_name }}"
           export DEV_IDS="${{ github.event.inputs.device_ids }}"
-          bash scripts/make_ak3.sh "$IMG" dist "Ace6-GKI-6.6-fengchi-FolkSU-${DEV_TAG}${SUFFIX}.zip" \
+          bash scripts/make_ak3.sh "$IMG" dist "Ace6-GKI-6.6-fengchi-FinaSU-${DEV_TAG}${SUFFIX}.zip" \
             || { echo "!! AK3 打包失败(原始 Image 已另传, 不影响内核产物)"; exit 0; }
           ls -lh dist/
 
@@ -263,7 +266,7 @@ jobs:
       - name: 上传刷机包
         uses: actions/upload-artifact@v7
         with:
-          name: Ace6-GKI-6.6-fengchi-FolkSU-${{ github.run_number }}
+          name: Ace6-GKI-6.6-fengchi-FinaSU-${{ github.run_number }}
           path: dist/*.zip
           if-no-files-found: ignore
           retention-days: 30

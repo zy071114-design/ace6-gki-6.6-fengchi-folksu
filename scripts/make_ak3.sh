@@ -10,7 +10,7 @@ die()  { printf '\n\033[1;31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${1:?需要 Image 路径}"
 OUTDIR="${2:?需要输出目录}"
-ZIPNAME="${3:-Ace6-GKI-6.6-fengchi-FolkSU.zip}"
+ZIPNAME="${3:-Ace6-GKI-6.6-fengchi-FinaSU.zip}"
 # 第 4 个参数: 用哪个 anykernel.sh (默认 ak3/anykernel.sh;
 # 给社区参考内核打包时用 ak3/anykernel-ref.sh, 它会如实写明 root 是内置 SukiSU)
 AK3_SCRIPT="${4:-anykernel.sh}"
@@ -61,7 +61,8 @@ cat > "$WORK/README-刷机须知.txt" <<EOF
 【${DEV_NAME:-一加 Ace 6} 专用内核 (${DEV_IDS:-PLQ110/ossi/SM8750})】
 * 本包仅适用于 ${DEV_NAME:-一加 Ace 6} (${DEV_IDS:-PLQ110/ossi/SM8750})。
 * 其他 6.6 设备/机型严禁刷入: 电源/充电/温控/显示驱动不匹配, 刷入后必现随机重启。
-* 已实测验证: 风驰调度 / 内置 FolkSU root / TCP 增强 / BBG / BTF。
+* 内置 Root: FinaSU v1.0.4 内核驱动 (KSU_VERSION=32960, UAPI=6) —— 需配 FinaSU 管理器。
+* 已实测验证: 风驰调度 / 内置 FinaSU root / BTF / 网络栈增强 (BBR+fq)。
 * 刷入前务必备份当前 boot_a 分区, 以便随时回滚。
 EOF
 
