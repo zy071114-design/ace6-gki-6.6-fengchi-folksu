@@ -1,7 +1,10 @@
-name: Build Ace6 GKI 6.6 (fengchi + FolkSU)
+name: Build Ace6 GKI 6.6 (fengchi + FinaSU)
 
 # 一加 Ace 6 (PLQ110 / ossi / SM8750 "sun")
-#   GKI 6.6 官方 ace_6 源码 + 风驰内核(HMBIRD/scx) + FolkSU(KernelSU, UAPI=5)
+#   GKI 6.6 官方 ace_6 源码 + 风驰内核(HMBIRD/scx) + FinaSU(KernelSU, UAPI=6)
+#
+# FinaSU 是 FolkSU 原仓库 (github.com/LyraVoid/FinaSU) 改名后的新版本, v1.0.4 把
+# KERNEL_SU_UAPI_VERSION 从 5 提到 6 -> 旧 FolkSU 内核会被管理器拒绝, 必须重编。
 
 on:
   workflow_dispatch:
@@ -10,8 +13,16 @@ on:
         description: '移植风驰内核 (HMBIRD/scx 调度器)'
         type: boolean
         default: true
+      fengchi_patch_url:
+        description: '机型专用风驰补丁 URL (留空=用仓库内 fengchi-ace6.patch; 如 Ace5 Pro 用 WildKernels oneplus/hmbird/fengchi_OP-ACE-5-PRO_A15.patch)'
+        type: string
+        default: ''
+      susfs_ref:
+        description: '可选: 锁定 susfs4ksu 的提交/分支 (留空=分支 HEAD)'
+        type: string
+        default: ''
       apply_susfs:
-        description: '附加 SuSFS 隐藏补丁 (与 FolkSU 目录结构可能冲突)'
+        description: '附加 SuSFS 隐藏补丁 (与 FinaSU 目录结构可能冲突)'
         type: boolean
         default: false
       apply_ksu:
@@ -51,6 +62,10 @@ on:
         description: '内核源码分支 (b_*=公开阉割版只有 sched_ext; v_*=完整厂商树自带 HMBIRD)'
         type: string
         default: 'oneplus/sm8750_v_16.0.0_ace_6'
+      kernel_ref:
+        description: '可选: 按提交号/标签构建 (留空=用分支头; 例: 5a398499aa 是 6.6.30 提交)'
+        type: string
+        default: ''
       device_tag:
         description: '机型短标识(产物/zip命名用, 如 ace6/op13/pad3)'
         type: string
@@ -64,9 +79,9 @@ on:
         type: string
         default: 'PLQ110/ossi/SM8750'
       ksu_expected_version:
-        description: 'FolkSU KSU_VERSION (须与管理器 APK 版本号一致)'
+        description: 'FinaSU KSU_VERSION (须与管理器 APK 版本号一致; v1.0.4 = 32960)'
         type: string
-        default: '32787'
+        default: '32960'
       localversion:
         description: '内核版本后缀 (默认对齐出厂内核的完整版本串)'
         type: string
@@ -77,11 +92,11 @@ on:
         options: [android, ubuntu]
         default: android
       ksu_expected_size:
-        description: 'FolkSU 管理器证书长度 (十六进制)'
+        description: 'FinaSU 管理器证书长度 (十六进制, v1.0.4 实测 0x2cc)'
         type: string
         default: '0x2cc'
       ksu_expected_hash:
-        description: 'FolkSU 管理器证书 SHA-256'
+        description: 'FinaSU 管理器证书 SHA-256 (v1.0.4 与旧 FolkSU 同一把密钥)'
         type: string
         default: '2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458'
       build_target:
@@ -92,9 +107,13 @@ on:
         description: '用参考内核(实测可启动)的完整 .config 代替树的 gki_defconfig (configs/ref-6.6.150.config)'
         type: boolean
         default: false
+      extra_config:
+        description: '额外 CONFIG 覆盖 (空格分隔, 支持 =y/=m/=n/=数字/=字符串), 仅调试对照用'
+        type: string
+        default: ''
 
 concurrency:
-  group: ace6-gki-${{ github.ref }}
+  group: ace6-gki-${{ github.ref }}-${{ github.event.inputs.device_tag }}
   cancel-in-progress: false
 
 jobs:
@@ -183,7 +202,9 @@ jobs:
       - name: 编译内核
         env:
           APPLY_FENGCHI: ${{ github.event.inputs.apply_fengchi == 'true' && '1' || '0' }}
+          FENGCHI_PATCH_URL: ${{ github.event.inputs.fengchi_patch_url }}
           APPLY_SUSFS: ${{ github.event.inputs.apply_susfs == 'true' && '1' || '0' }}
+          SUSFS_REF: ${{ github.event.inputs.susfs_ref }}
           APPLY_KSU: ${{ github.event.inputs.apply_ksu == 'true' && '1' || '0' }}
           APPLY_ZRAM: ${{ github.event.inputs.apply_zram == 'true' && '1' || '0' }}
           APPLY_NET: ${{ github.event.inputs.apply_net == 'true' && '1' || '0' }}
@@ -192,6 +213,7 @@ jobs:
           ENABLE_BTF: ${{ github.event.inputs.enable_btf == 'true' && '1' || '0' }}
           KERNEL_REPO: ${{ github.event.inputs.kernel_repo }}
           KERNEL_BRANCH: ${{ github.event.inputs.kernel_branch }}
+          KERNEL_REF: ${{ github.event.inputs.kernel_ref }}
           KSU_EXPECTED_VERSION: ${{ github.event.inputs.ksu_expected_version }}
           LOCALVERSION_SUFFIX: ${{ github.event.inputs.localversion }}
           KSU_EXPECTED_SIZE: ${{ github.event.inputs.ksu_expected_size }}
@@ -199,6 +221,7 @@ jobs:
           BUILD_TARGET: ${{ github.event.inputs.build_target }}
           TOOLCHAIN: ${{ github.event.inputs.toolchain }}
           USE_REF_CONFIG: ${{ github.event.inputs.use_ref_config == 'true' && '1' || '0' }}
+          EXTRA_CONFIG: ${{ github.event.inputs.extra_config }}
           RELAX_VERMAGIC: ${{ github.event.inputs.relax_vermagic == 'true' && '1' || '0' }}
           INSTALL_DEPS: '0'
         run: |
@@ -245,7 +268,7 @@ jobs:
           DEV_TAG="${{ github.event.inputs.device_tag }}"
           export DEV_NAME="${{ github.event.inputs.device_name }}"
           export DEV_IDS="${{ github.event.inputs.device_ids }}"
-          bash scripts/make_ak3.sh "$IMG" dist "Ace6-GKI-6.6-fengchi-FolkSU-${DEV_TAG}${SUFFIX}.zip" \
+          bash scripts/make_ak3.sh "$IMG" dist "Ace6-GKI-6.6-fengchi-FinaSU-${DEV_TAG}${SUFFIX}.zip" \
             || { echo "!! AK3 打包失败(原始 Image 已另传, 不影响内核产物)"; exit 0; }
           ls -lh dist/
 
@@ -263,7 +286,7 @@ jobs:
       - name: 上传刷机包
         uses: actions/upload-artifact@v7
         with:
-          name: Ace6-GKI-6.6-fengchi-FolkSU-${{ github.run_number }}
+          name: Ace6-GKI-6.6-fengchi-FinaSU-${{ github.run_number }}
           path: dist/*.zip
           if-no-files-found: ignore
           retention-days: 30

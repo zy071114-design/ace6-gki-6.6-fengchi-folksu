@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # AnyKernel3 刷机脚本 —— 一加 Ace 6 (PLQ110 / ossi / SM8750 "sun")
-# 内核: GKI 6.6 (官方 ace_6 源码) + 风驰 HMBIRD 调度类 + FolkSU(KernelSU, UAPI 5)
+# 内核: GKI 6.6 (官方 ace_6 源码) + 风驰 HMBIRD 调度类 + FinaSU(KernelSU, UAPI 6)
 #
 # 分区布局要点:
 #   * A/B 双槽 (IS_SLOT_DEVICE=1)
@@ -13,7 +13,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=Ace6 GKI 6.6 (fengchi + FolkSU)
+kernel.string=@DEV_NAME@
 do.devicecheck=0
 do.modules=0
 do.systemless=1
@@ -43,7 +43,7 @@ NO_VBMETA_PARTITION_PATCH=1
 
 ui_print " "
 ui_print "*******************************"
-ui_print " Ace6 GKI 6.6 + fengchi + FolkSU"
+ui_print " @DEV_NAME@ + fengchi + FinaSU"
 ui_print "*******************************"
 ui_print " "
 ui_print "!! 仅限 @DEV_IDS@ !!"
@@ -52,9 +52,9 @@ ui_print "!! (电源/温控/显示驱动不匹配) !!"
 ui_print " "
 ui_print "[i] Device : @DEV_NAME@"
 ui_print "[i] Kernel : GKI 6.6 official source + fengchi (HMBIRD)"
-ui_print "[i] Root   : FolkSU (KernelSU, UAPI=5)"
+ui_print "[i] Root   : FinaSU (KernelSU, UAPI=6)"
 ui_print " "
-ui_print "[i] 机型: @DEV_NAME@ / 内核: GKI 6.6 + 风驰 / Root: FolkSU"
+ui_print "[i] 机型: @DEV_NAME@ / 内核: 风驰 HMBIRD / Root: FinaSU"
 ui_print " "
 
 # 规避部分机型文件系统 I/O 延迟导致的二进制执行异常 (cctv18 同款加固)
@@ -82,6 +82,6 @@ fi
 ## end boot install
 
 ui_print " "
-ui_print "[OK] 刷入完成, 重启后用 FolkSU 管理器确认 Root (应显示 32783-5)"
-ui_print "[OK] Done. Reboot and check root with the FolkSU manager."
+ui_print "[OK] 刷入完成, 重启后用 FinaSU 管理器确认 Root (应显示 32960-6)"
+ui_print "[OK] Done. Reboot and check root with the FinaSU manager (32960 / uapi 6)."
 ui_print " "

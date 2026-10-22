@@ -75,6 +75,18 @@ mkdir -p "$WORKDIR_TMP"
 node "$SCRIPT_DIR/strip_selinux_hunks.js" "$P50" "$P50_STRIPPED" || die "摘除 SELinux 改动失败"
 P50_USE="$P50_STRIPPED"
 
+# 已知基线差异 (v_15 / 6.6.66 实测): fs/proc/base.c 里没有 <linux/dma-buf.h>,
+# 而补丁正是拿它当锚点插入 susfs_def.h 的 include -> hunk#1 必然失败。
+# 这里先按同样的位置补上这一行, 让上下文对上 (补的是标准 include, 无副作用)。
+if [ -f fs/proc/base.c ] && ! grep -q '<linux/dma-buf.h>' fs/proc/base.c; then
+  awk '{print} /#include <linux\/cpufreq_times.h>$/{print "#include <linux/dma-buf.h>"}' \
+    fs/proc/base.c > "$WORKDIR_TMP/base.c.new" \
+    && mv "$WORKDIR_TMP/base.c.new" fs/proc/base.c || die "预修 fs/proc/base.c 失败"
+  grep -q '<linux/dma-buf.h>' fs/proc/base.c \
+    && echo "    预修: fs/proc/base.c 补入 <linux/dma-buf.h> (该基线缺这一行)" \
+    || die "预修 fs/proc/base.c 未生效"
+fi
+
 # 两个坑 (都是实测踩到的):
 #   1) toybox patch 的 --dry-run **仍会改文件**, 所以不能拿它当"纯预检";
 #   2) 风驰补丁已给树带来 +3 行左右的漂移, 用 -F0 会误判, 必须留 fuzz。
