@@ -129,8 +129,8 @@ log "    KernelSU 源根: $KS"
 SH="$KS/feature/selinux_hide.c"
 [ -f "$SH" ] || die "找不到 $SH"
 for sym in ksu_selinux_hide_enabled ksu_selinux_hide_running; do
-  grep -q "static bool $sym" "$SH" || die "$SH: 未找到 'static bool $sym'"
-  sed -i "s/^static bool $sym/bool $sym/" "$SH"
+  grep -qE "^(static bool|bool|extern bool) $sym" "$SH" || die "$SH: 找不到 $sym 定义"
+  sed -i "s/^static bool $sym/bool $sym/" "$SH"   # 已是全局时为空操作
 done
 sed -i 's/^static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key)/DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key)/' "$SH"
 sed -i 's/^static struct page \*fake_status = NULL/struct page *fake_status = NULL/' "$SH"
@@ -208,16 +208,18 @@ log "    ksu_su_compat_enabled -> static_key_true (赋值/读取均已改写)"
 # 语义正确 —— 因此保留原名、仅加第 3 参是最小且安全的做法。
 SHOOK="$KS/hook/setuid_hook.c"; SHOOKH="$KS/hook/setuid_hook.h"
 [ -f "$SHOOK" ] || die "找不到 $SHOOK"
-sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)/' "$SHOOK"
-grep -q '^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)$' "$SHOOK" \
-  || die "$SHOOK: 追加第 3 参失败"
-sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid);$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);/' "$SHOOKH"
-grep -q 'int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);' "$SHOOKH" \
-  || die "$SHOOKH: 头文件改签名失败"
-# 确保函数体里没有残留的未定义名字 (改名方案已弃用, 这里只做完整性确认)
-# 注意: Android 的 toybox grep 不认 \b, 用 POSIX 字符类
-if grep -qE '(^|[^_a-zA-Z])(ruid|euid)([^_a-zA-Z]|$)' "$SHOOK"; then
-  die "$SHOOK: 函数体里出现了不该有的 ruid/euid (改名残留)"
+if grep -qE '^int ksu_handle_setresuid\(uid_t [^,]+, uid_t [^,]+, uid_t [^)]+\)$' "$SHOOK"; then
+  log "    ksu_handle_setresuid 已是 3 参 (v1.2.x), 跳过"
+else
+  sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)/' "$SHOOK"
+  grep -q '^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)$' "$SHOOK" \
+    || die "$SHOOK: 追加第 3 参失败"
+  sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid);$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);/' "$SHOOKH"
+  grep -q 'int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);' "$SHOOKH" \
+    || die "$SHOOKH: 头文件改签名失败"
+  if grep -qE '(^|[^_a-zA-Z])(ruid|euid)([^_a-zA-Z]|$)' "$SHOOK"; then
+    die "$SHOOK: 函数体里出现了不该有的 ruid/euid (改名残留)"
+  fi
 fi
 BE="$KS/hook/syscall_event_bridge.c"
 [ -f "$BE" ] && sed -i 's/ksu_handle_setresuid(old_uid, current_uid().val)/ksu_handle_setresuid(old_uid, current_uid().val, current_uid().val)/' "$BE"
@@ -605,7 +607,7 @@ log "6/6 最终校验"
 [ -f include/linux/susfs.h ]                         || die "include/linux/susfs.h 丢失"
 [ -f include/linux/susfs_def.h ]                     || die "include/linux/susfs_def.h 丢失"
 grep -q '^obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile || die "fs/Makefile 未挂 susfs.o"
-grep -q 'ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)' "$KS/hook/setuid_hook.c" || die "setresuid 第 3 参未生效"
+grep -qE '^int ksu_handle_setresuid\(uid_t [^,]+, uid_t [^,]+, uid_t [^)]+\)$' "$KS/hook/setuid_hook.c" || die "setresuid 不是 3 参签名"
 grep -q 'DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)' "$KS/feature/sucompat.c"          || die "su_compat 静态键未生效"
 grep -qE '^bool ksu_selinux_hide_running' "$KS/feature/selinux_hide.c"                   || die "selinux_hide 去 static 未生效"
 grep -q 'susfs_adapter.o' "$KB"                                                    || die "适配层未挂入构建"
