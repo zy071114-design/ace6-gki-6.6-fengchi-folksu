@@ -163,9 +163,13 @@ SC="$KS/feature/sucompat.c"; SCH="$KS/feature/sucompat.h"
 [ -f "$SC" ] || die "找不到 $SC"
 grep -q 'bool ksu_su_compat_enabled' "$SC" || die "$SC: 未找到 bool ksu_su_compat_enabled"
 sed -i 's/^bool ksu_su_compat_enabled __read_mostly = true;/DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled);/' "$SC"
-grep -q 'DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)' "$SC" || die "$SC: 静态键定义失败"
-sed -i 's/^extern bool ksu_su_compat_enabled;/extern struct static_key_true ksu_su_compat_enabled;/' "$SCH"
-grep -q 'extern struct static_key_true ksu_su_compat_enabled;' "$SCH" || die "$SCH: extern 改型失败"
+if grep -q 'static_branch_likely(&ksu_su_compat_enabled)' "$SCH"; then
+  echo "    sucompat.h 已自带 CONFIG_KSU_SUSFS 双分支, 跳过头文件改写"
+else
+  sed -i 's/^extern bool ksu_su_compat_enabled;/extern struct static_key_true ksu_su_compat_enabled;/' "$SCH"
+  grep -q 'extern struct static_key_true ksu_su_compat_enabled;' "$SCH" || die "$SCH: extern 改型失败"
+  include_static_key "$SCH"
+fi
 # 把运行时赋值改成静态键开关
 sed -i 's/^\( *\)ksu_su_compat_enabled = enable;/\1if (enable)\n\1\tstatic_branch_enable(\&ksu_su_compat_enabled);\n\1else\n\1\tstatic_branch_disable(\&ksu_su_compat_enabled);/' "$SC"
 if grep -qE '^[[:space:]]*ksu_su_compat_enabled[[:space:]]*=' "$SC"; then
@@ -191,7 +195,7 @@ fi
 # 合法形式只有: static_branch_*() 读取 / DEFINE_STATIC_KEY_* 定义 /
 #               extern struct static_key_true 声明。
 BADKEY="$(grep -rnE '(^|[^_a-zA-Z])ksu_su_compat_enabled' "$KS" --include=*.c --include=*.h 2>/dev/null \
-  | grep -vE 'static_branch_(likely|unlikely|enable|disable)|DEFINE_STATIC_KEY|extern struct static_key_true' || true)"
+  | grep -vE 'static_branch_(likely|unlikely|enable|disable)|static_key_enabled|DEFINE_STATIC_KEY|extern struct static_key_true|su_compat\.h:' || true)"
 if [ -n "$BADKEY" ]; then
   echo "$BADKEY" | sed 's/^/    /'
   die "$KS: 仍有把静态键当布尔裸用的地方 (会编译失败)"
