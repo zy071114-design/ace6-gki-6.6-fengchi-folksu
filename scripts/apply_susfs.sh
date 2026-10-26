@@ -106,7 +106,8 @@ grep -q 'ksu_handle_sys_reboot' kernel/reboot.c  || die "kernel/reboot.c 未打�
 # (历史事故: 早期脚本主动 strip 了这三处, FinaSU 在 CONFIG_KSU_SUSFS 下又是 return 0,
 #  两边都不接管 -> 管理器里开"隐藏 SELinux 修改"也没用, 春秋必报「检测到可疑SELinux」)
 for spec in \
-  "security/selinux/avc.c:ksu_selinux_hide_running" \
+  "security/selinux/avc.c:susfs_is_avc_log_spoofing_enabled" \
+  "security/selinux/avc.c:bypass_orig_flow" \
   "security/selinux/hooks.c:handle_selinux_setprocattr" \
   "security/selinux/hooks.c:my_setprocattr" \
   "security/selinux/selinuxfs.c:handle_sel_write_access" \

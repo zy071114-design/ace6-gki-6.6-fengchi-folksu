@@ -709,7 +709,7 @@ done
 SELINUX_HIDE_APPLIED=0
 if [ "${SUSFS_APPLIED}" = "1" ]; then
   for spec in \
-    "security/selinux/avc.c:ksu_selinux_hide_running" \
+    "security/selinux/avc.c:susfs_is_avc_log_spoofing_enabled" \
     "security/selinux/hooks.c:handle_selinux_setprocattr" \
     "security/selinux/selinuxfs.c:handle_sel_write_access" \
     "security/selinux/selinuxfs.c:handle_sel_write_context"; do
