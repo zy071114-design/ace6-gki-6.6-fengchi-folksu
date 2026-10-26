@@ -80,6 +80,14 @@ EOF
 
 # 构建信息只作为独立文件放进 zip (绝不能 append 到 anykernel.sh:
 # 里面的 "BUILT_AT=2026-10-10 15:21:39 UTC" 不是合法 shell 赋值, 会让安装器报错)
+# 出品要求 (硬性): SUSFS=1 的包, build-info 里必须有 SELINUX_HIDE=1。
+# 少了它等于 SUSFS 的 SELinux 钩子没编进去 -> Duck Detector / 春秋 会报
+# 「Enabling with KSU context materialized」/「检测到可疑 SELinux」。
+if [ "$(_bi_get SUSFS)" = "1" ] && [ "$(_bi_get SELINUX_HIDE)" != "1" ]; then
+  echo "[x] 出品要求不满足: SUSFS=1 但 SELINUX_HIDE 不是 1 (SELinux 隐藏缺失), 拒绝打包" >&2
+  exit 1
+fi
+
 if [ -f "$REPO_ROOT/work/out/build-info.txt" ]; then
   cp "$REPO_ROOT/work/out/build-info.txt" "$WORK/build-info.txt"
 fi
