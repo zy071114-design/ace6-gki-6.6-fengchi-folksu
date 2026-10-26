@@ -457,6 +457,10 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   #   还能看到 real status 的 sequence(14) 与 access 的 seqno(1) 不一致。
   node "$REPO_ROOT/scripts/selinux_all_uids.js" \
     || die "SELinux 全 uid 生效补丁失败"
+  # 归一化 fake status 页: Duck Detector 会比对 status.policyload 与 /access 的 seqno,
+  # 克隆到的页是 0/0 而 access 固定回 1 -> 被判 policyload/access seqno split
+  node "$REPO_ROOT/scripts/selinux_fake_status.js" \
+    || die "SELinux 假状态页归一化失败"
 else
   warn "APPLY_SUSFS=0 -> 不集成 SuSFS"
   SUSFS_APPLIED=0
