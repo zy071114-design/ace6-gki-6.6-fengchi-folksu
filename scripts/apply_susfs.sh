@@ -62,18 +62,13 @@ cp "$KP/include/linux/susfs_def.h" include/linux/susfs_def.h || die "拷贝 susf
 # ------------------------------------------------------------ 2. 内核侧补丁
 log "2/6 应用内核侧补丁"
 
-# 关键: 先摘掉 SUSFS 对 security/selinux/{avc,hooks,selinuxfs}.c 的改动。
-# FinaSU 自己已经用另一套机制实现了同样的 SELinux 隐藏:
-#   selinux_hide.c 运行时 patch sel_handle_status_ops->open + LSM hook setprocattr
-#   avc_spoof.c    kprobe 拦 slow_avc_audit
-# SUSFS 又在源码层改同一批函数 -> 两层叠加, SELinux 对外行为与原包不同,
-# 会被"春秋检测"之类工具判为可疑 SELinux (实测: 不带 SUSFS 的原包不报, 带则报)。
-# 摘除后 SELinux 行为回到与 FinaSU 原包一致, SUSFS 其余功能全部保留。
+# 保留 SUSFS 对 security/selinux/{avc,hooks,selinuxfs}.c 的改动 —— 必须保留:
+#   FinaSU 的 selinux_hide.c 在 CONFIG_KSU_SUSFS 下是 **直接 return 0** 的空实现
+#   ("#ifdef CONFIG_KSU_SUSFS / return 0;"), 即它主动把 SELinux 隐藏让给 SUSFS。
+#   早期我们为了"避免两层叠加"剥掉了这三处, 结果两边都没做 -> 春秋检测必然命中
+#   「检测SELinux Policy时发现可疑问题」, 且管理器里开"隐藏 SELinux 修改"也没用。
 P50_USE="$P50"
-P50_STRIPPED="$WORKDIR_TMP/50_susfs_no_selinux.patch"
 mkdir -p "$WORKDIR_TMP"
-node "$SCRIPT_DIR/strip_selinux_hunks.js" "$P50" "$P50_STRIPPED" || die "摘除 SELinux 改动失败"
-P50_USE="$P50_STRIPPED"
 
 # 已知基线差异 (v_15 / 6.6.66 实测): fs/proc/base.c 里没有 <linux/dma-buf.h>,
 # 而补丁正是拿它当锚点插入 susfs_def.h 的 include -> hunk#1 必然失败。
@@ -105,11 +100,11 @@ REJ="$(find . -name '*.rej' -not -path './.git/*' | wc -l)"
 grep -q 'susfs.o' fs/Makefile                    || die "fs/Makefile 未挂入 susfs.o (补丁没生效?)"
 grep -q 'ksu_is_input_hook_enabled' drivers/input/input.c || die "drivers/input/input.c 未打上输入钩子"
 grep -q 'ksu_handle_sys_reboot' kernel/reboot.c  || die "kernel/reboot.c 未打上 SUSFS 分派"
-# 反向确认: 三个 SELinux 文件必须**没有**被 SUSFS 改动 (否则又会和 FinaSU 打架)
+# 确认 SELinux 三处改动**已经**打上 (这是 SUSFS 负责 SELinux 隐藏的前提)
 for f in security/selinux/avc.c security/selinux/hooks.c security/selinux/selinuxfs.c; do
-  grep -q 'CONFIG_KSU_SUSFS' "$f" && die "$f 仍被 SUSFS 改动 (会与 FinaSU 的 SELinux 隐藏冲突)"
+  grep -q 'CONFIG_KSU_SUSFS' "$f" || die "$f 没有 SUSFS 改动 (SELinux 隐藏会失效, 春秋可检出)"
 done
-log "    已应用, 0 reject; SELinux 三个文件保持原样 (交给 FinaSU 自己的机制)"
+log "    已应用, 0 reject; SELinux 三处改动已保留 (SUSFS 负责 SELinux 隐藏)"
 
 # ------------------------------------------------------- 3. FinaSU 侧改动
 log "3/6 FinaSU 侧适配改动"
