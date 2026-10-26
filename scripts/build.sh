@@ -451,6 +451,12 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   #   -> 春秋报「检测到可疑 SELinux Policy」。这一步不依赖用户开关。
   node "$REPO_ROOT/scripts/selinux_force_enable.js" \
     || die "SELinux 兜底启用补丁失败"
+  # 去掉 SUSFS 查询钩子上的 "current_uid().val >= 10000" 限制:
+  #   检测方的探针放在 android:zygotePreloadName 里跑, carrier 是 zygote 进程(uid 0),
+  #   带 uid 判断时它拿到的是真实策略 -> 能解析出 su/ksu_file/lsposed_file,
+  #   还能看到 real status 的 sequence(14) 与 access 的 seqno(1) 不一致。
+  node "$REPO_ROOT/scripts/selinux_all_uids.js" \
+    || die "SELinux 全 uid 生效补丁失败"
 else
   warn "APPLY_SUSFS=0 -> 不集成 SuSFS"
   SUSFS_APPLIED=0
