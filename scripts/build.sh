@@ -449,18 +449,24 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   #   backup_sepolicy 可能晚于 post-fs-data 才就绪(-EAGAIN), 或者管理器里
   #   「隐藏 SELinux 修改」开关没开 -> running 一直 false -> SUSFS 的钩子全部走原路径
   #   -> 春秋报「检测到可疑 SELinux Policy」。这一步不依赖用户开关。
-  node "$REPO_ROOT/scripts/selinux_force_enable.js" \
-    || die "SELinux 兜底启用补丁失败"
-  # 去掉 SUSFS 查询钩子上的 "current_uid().val >= 10000" 限制:
-  #   检测方的探针放在 android:zygotePreloadName 里跑, carrier 是 zygote 进程(uid 0),
-  #   带 uid 判断时它拿到的是真实策略 -> 能解析出 su/ksu_file/lsposed_file,
-  #   还能看到 real status 的 sequence(14) 与 access 的 seqno(1) 不一致。
-  node "$REPO_ROOT/scripts/selinux_all_uids.js" \
-    || die "SELinux 全 uid 生效补丁失败"
-  # 归一化 fake status 页: Duck Detector 会比对 status.policyload 与 /access 的 seqno,
-  # 克隆到的页是 0/0 而 access 固定回 1 -> 被判 policyload/access seqno split
-  node "$REPO_ROOT/scripts/selinux_fake_status.js" \
-    || die "SELinux 假状态页归一化失败"
+  # 可用 extra_config="#SELINUX_EXTRA=0" 关掉下面三个附加补丁 (排障用: 回到
+  # 只有「三处保留 + FinaSU 去 static」的最小配置, 也就是 Ace6 已验证能开机的状态)
+  SELINUX_EXTRA=1
+  case "$EXTRA_CONFIG" in *"#SELINUX_EXTRA=0"*) SELINUX_EXTRA=0;; esac
+  if [ "$SELINUX_EXTRA" = "1" ]; then
+    # boot_completed 兜底启用 SELinux 隐藏
+    node "$REPO_ROOT/scripts/selinux_force_enable.js" \
+      || die "SELinux 兜底启用补丁失败"
+    # 去掉 SUSFS 查询钩子上的 current_uid().val >= 10000
+    node "$REPO_ROOT/scripts/selinux_all_uids.js" \
+      || die "SELinux 全 uid 生效补丁失败"
+    # 归一化 fake status 页 (sequence/policyload=1)
+    node "$REPO_ROOT/scripts/selinux_fake_status.js" \
+      || die "SELinux 假状态页归一化失败"
+  else
+    warn "SELinux 附加补丁已关闭 (SELINUX_EXTRA=0): 仅保留三处 SUSFS 改动 + FinaSU 去 static"
+  fi
+
 else
   warn "APPLY_SUSFS=0 -> 不集成 SuSFS"
   SUSFS_APPLIED=0
