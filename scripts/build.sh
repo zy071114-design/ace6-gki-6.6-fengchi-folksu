@@ -115,8 +115,9 @@ JOBS="${JOBS:-$(nproc --all)}"
 BUILD_TARGET="${BUILD_TARGET:-Image}"
 INSTALL_DEPS="${INSTALL_DEPS:-0}"
 
-export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-ace6}"
-export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-gki-builder}"
+# 构建者/主机名要伪装成原厂, 否则 /proc/version 里 (ace6@gki-builder) 会暴露环境
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-kleaf}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-build-host}"
 export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(date -u '+%Y-%m-%d %H:%M:%S UTC')}"
 
 # --------------------------- 依赖安装 (可选) ---------------------------------
