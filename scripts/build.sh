@@ -445,6 +445,12 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   bash "$REPO_ROOT/scripts/apply_susfs.sh" "$SUSFS_DIR" "$CFGFILE" \
     || die "SUSFS 集成失败 (见上方 [susfs] 输出)"
   SUSFS_APPLIED=1
+  # boot_completed 兜底再启用一次 SELinux 隐藏:
+  #   backup_sepolicy 可能晚于 post-fs-data 才就绪(-EAGAIN), 或者管理器里
+  #   「隐藏 SELinux 修改」开关没开 -> running 一直 false -> SUSFS 的钩子全部走原路径
+  #   -> 春秋报「检测到可疑 SELinux Policy」。这一步不依赖用户开关。
+  node "$REPO_ROOT/scripts/selinux_force_enable.js" \
+    || die "SELinux 兜底启用补丁失败"
 else
   warn "APPLY_SUSFS=0 -> 不集成 SuSFS"
   SUSFS_APPLIED=0
