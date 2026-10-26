@@ -189,6 +189,32 @@ SRC_HEAD="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 log "基线: Linux $BASE_VERSION  提交 $SRC_HEAD"
 git log -1 --pretty='    %s' 2>/dev/null || true
 
+# ------------------- 1b. unicode 路径绕过修复 (CVE-2024-50089 类) ------------
+# 去掉 utf8 规范化里对"可忽略码点"(Default_Ignorable_Code_Point) 的特殊处理:
+# 否则带隐藏字符的文件名可以绕过按字符串匹配的路径隐藏/过滤 ("unicode 扫盘")。
+# 补丁来自 Numbersf/Action-Build 的 patches/unicode_bypass_fix_6.1+.patch。
+UNICODE_FIX_APPLIED=0
+UNI_PATCH="$REPO_ROOT/patches/unicode_bypass_fix_6.1+.patch"
+if [ -f "$UNI_PATCH" ]; then
+  log "应用 unicode 路径绕过修复"
+  if git apply -p1 --whitespace=nowarn "$UNI_PATCH" 2>/dev/null; then
+    echo "    git apply 成功"
+    UNICODE_FIX_APPLIED=1
+  elif patch -p1 -F3 --no-backup-if-mismatch -i "$UNI_PATCH" >/dev/null 2>&1; then
+    echo "    patch -F3 成功"
+    UNICODE_FIX_APPLIED=1
+  else
+    find . -name '*.rej' -not -path './.git/*' -delete
+    warn "unicode 修复补丁应用失败 (不影响其它功能, 但漏洞仍在)"
+  fi
+  if [ "$UNICODE_FIX_APPLIED" = "1" ]; then
+    grep -q 'ignore_init' fs/unicode/mkutf8data.c && die "unicode 修复未生效 (mkutf8data.c 仍含 ignore_init)"
+    echo "    fs/unicode/{mkutf8data.c,utf8data.c_shipped} 已更新"
+  fi
+else
+  warn "缺少 patches/unicode_bypass_fix_6.1+.patch, 跳过"
+fi
+
 # --------------------------- 2. 风驰内核补丁 ---------------------------------
 if [ "$APPLY_FENGCHI" = "1" ]; then
   log "移植风驰内核 (HMBIRD 调度类)"
@@ -688,6 +714,7 @@ cp "$IMAGE" "$WORKDIR/out/Image"
   echo "KSU_EXPECTED_HASH=$KSU_EXPECTED_HASH"
   echo "FENGCHI=$APPLY_FENGCHI"
   echo "SUSFS=$SUSFS_APPLIED"
+  echo "UNICODE_BYPASS_FIX=${UNICODE_FIX_APPLIED:-0}"
   echo "SUSFS_VERSION=${SUSFS_VER:-}"
   echo "SUSFS_COMMIT=${SUSFS_COMMIT:-}"
   echo "BUILT_AT=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
