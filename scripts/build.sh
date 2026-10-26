@@ -41,8 +41,8 @@ KERNEL_DIR="${KERNEL_DIR:-common}"
 # 所以必须改用 v1.0.4 的内核侧代码重编, 不能沿用 FolkSU 的驱动。
 KSU_REPO="${KSU_REPO:-https://github.com/LyraVoid/FinaSU.git}"
 # v1.0.4: 提交数 2960 -> KSU_VERSION = 30000+2960 = 32960 (与 APK versionCode 32960 一致)
-KSU_TAG="${KSU_TAG:-v1.0.4}"
-KSU_EXPECTED_VERSION="${KSU_EXPECTED_VERSION:-32960}"
+KSU_TAG="${KSU_TAG:-v1.2.1}"
+KSU_EXPECTED_VERSION="${KSU_EXPECTED_VERSION:-33074}"
 
 APPLY_FENGCHI="${APPLY_FENGCHI:-1}"
 FENGCHI_PATCH_URL="${FENGCHI_PATCH_URL:-}"
@@ -309,7 +309,8 @@ grep -qxF '/drivers/kernelsu' .git/info/exclude 2>/dev/null || echo '/drivers/ke
 
 # kernel/include/uapi -> ../../uapi, 在该布局下解析到 KernelSU/uapi
 [ -L KernelSU/kernel/include/uapi ] || ln -sfn ../../uapi KernelSU/kernel/include/uapi
-[ -f KernelSU/kernel/include/uapi/supercall.h ] || die "FinaSU uapi 布局异常"
+[ -f KernelSU/uapi/supercall.h ] || [ -f KernelSU/kernel/include/uapi/supercall.h ] \
+  || die "FinaSU uapi 布局异常 (既无 uapi/supercall.h 也无 kernel/include/uapi/supercall.h)"
 
 # 与 KernelSU 官方 setup.sh 完全相同的接入方式
 ln -sfn ../KernelSU/kernel drivers/kernelsu
