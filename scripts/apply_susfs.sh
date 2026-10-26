@@ -354,6 +354,12 @@ SEOF
   log "    SUSFS SID 块 -> selinux.c; 声明 -> selinux.h; 初始化 -> rules.c"
 fi
 
+# FinaSU v1.2.x 起自带 SUSFS 对接扩展 (kernel/extension/susfs.c),
+# 它已经提供 ksu_handle_sys_reboot / ksu_is_input_hook_enabled 等全部符号;
+# 再写我们自己的适配层会重复定义 -> 链接期 duplicate symbol。
+if [ -f "$KS/extension/susfs.c" ]; then
+  log "4/6 FinaSU 自带 kernel/extension/susfs.c, 跳过自写适配层"
+else
 # ---------------------------------------------------------- 4. 适配层
 log "4/6 写 KSU 适配层 feature/susfs_adapter.c"
 
@@ -534,6 +540,7 @@ grep -q 'kernelsu-objs' "$KB" || die "$KB 不是 KernelSU 的 Kbuild (无 kernel
 grep -q 'susfs_adapter.o' "$KB" || printf 'kernelsu-objs += feature/susfs_adapter.o\n' >> "$KB"
 grep -q 'susfs_adapter.o' "$KB" || die "$KB: 未挂入 susfs_adapter.o"
 log "    已挂入 $KB"
+fi
 
 # ------------------------------------------------------------- 5. 配置
 log "5/6 写入 SUSFS 标准全套配置 -> $CFGFILE"
@@ -614,8 +621,12 @@ grep -q '^obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile || die "fs/Makefile �
 grep -qE '^int ksu_handle_setresuid\(uid_t [^,]+, uid_t [^,]+, uid_t [^)]+\)$' "$KS/hook/setuid_hook.c" || die "setresuid 不是 3 参签名"
 grep -q 'DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)' "$KS/feature/sucompat.c"          || die "su_compat 静态键未生效"
 grep -qE '^bool ksu_selinux_hide_running' "$KS/feature/selinux_hide.c"                   || die "selinux_hide 去 static 未生效"
-grep -q 'susfs_adapter.o' "$KB"                                                    || die "适配层未挂入构建"
-grep -q "ksu_handle_sys_reboot" "$KS/feature/susfs_adapter.c"                            || die "适配层缺少 reboot 分派"
+if [ -f "$KS/extension/susfs.c" ]; then
+  grep -q "ksu_handle_sys_reboot" "$KS/extension/susfs.c" || die "官方 SUSFS 扩展缺少 reboot 分派"
+else
+  grep -q 'susfs_adapter.o' "$KB" || die "适配层未挂入构建"
+  grep -q "ksu_handle_sys_reboot" "$KS/feature/susfs_adapter.c" || die "适配层缺少 reboot 分派"
+fi
 if grep -q 'ksu_handle_execveat(' fs/exec.c; then die "fs/exec.c 仍有 sucompat 钩子残留"; fi
 grep -q 'CONFIG_KSU_SUSFS=y' "$CFGFILE"                                            || die "配置未写入"
 
