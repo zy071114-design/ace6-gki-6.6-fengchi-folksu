@@ -697,6 +697,33 @@ done
   || die "配置里 CONFIG_HMBIRD_SCHED=y 但镜像里找不到 hmbird_sched, 风驰没编进去"; \
   grep -aq 'hmbird_sched' "$IMAGE" && echo "    ✅ 风驰(HMBIRD) 符号确认存在"; }
 
+# ---------------- SELinux 隐藏 出厂校验 (硬性) ----------------
+# SUSFS=1 时, 内核里必须真的有 SUSFS 的 SELinux 隐藏钩子。少一处, 管理器里开
+# "隐藏 SELinux 修改"也不会生效 -> 春秋报「检测到可疑SELinux」。
+SELINUX_HIDE_APPLIED=0
+if [ "${SUSFS_APPLIED}" = "1" ]; then
+  for spec in \
+    "security/selinux/avc.c:ksu_selinux_hide_running" \
+    "security/selinux/hooks.c:handle_selinux_setprocattr" \
+    "security/selinux/selinuxfs.c:handle_sel_write_access" \
+    "security/selinux/selinuxfs.c:handle_sel_write_context"; do
+    _f="${spec%%:*}"; _p="${spec#*:}"
+    grep -q "$_p" "$_f" || die "SUSFS=1 但 $_f 没有 $_p —— SELinux 隐藏缺失, 拒绝出包"
+  done
+  SELINUX_HIDE_APPLIED=1
+  # 符号级复核: 静态函数也在 System.map 里, 且 write_op[] 取了地址不会被内联掉
+  _NM=""
+  for c in out/System.map System.map "$WORKDIR/out/System.map"; do [ -f "$c" ] && { _NM="$c"; break; }; done
+  if [ -n "$_NM" ]; then
+    for sym in handle_sel_write_access handle_sel_write_context handle_selinux_setprocattr my_write_access; do
+      grep -q " $sym$" "$_NM" || die "System.map 里找不到 $sym —— SELinux 隐藏钩子没编进去"
+    done
+    echo "    ✅ SELinux 隐藏钩子符号确认存在 ($_NM)"
+  else
+    warn "没有 System.map, 跳过 SELinux 钩子的符号级复核 (源码级校验已通过)"
+  fi
+fi
+
 mkdir -p "$WORKDIR/out"
 cp "$IMAGE" "$WORKDIR/out/Image"
 {
@@ -714,6 +741,7 @@ cp "$IMAGE" "$WORKDIR/out/Image"
   echo "KSU_EXPECTED_HASH=$KSU_EXPECTED_HASH"
   echo "FENGCHI=$APPLY_FENGCHI"
   echo "SUSFS=$SUSFS_APPLIED"
+  echo "SELINUX_HIDE=${SELINUX_HIDE_APPLIED}"
   echo "UNICODE_BYPASS_FIX=${UNICODE_FIX_APPLIED:-0}"
   echo "SUSFS_VERSION=${SUSFS_VER:-}"
   echo "SUSFS_COMMIT=${SUSFS_COMMIT:-}"

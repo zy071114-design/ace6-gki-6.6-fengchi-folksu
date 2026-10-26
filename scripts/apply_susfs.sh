@@ -100,11 +100,23 @@ REJ="$(find . -name '*.rej' -not -path './.git/*' | wc -l)"
 grep -q 'susfs.o' fs/Makefile                    || die "fs/Makefile 未挂入 susfs.o (补丁没生效?)"
 grep -q 'ksu_is_input_hook_enabled' drivers/input/input.c || die "drivers/input/input.c 未打上输入钩子"
 grep -q 'ksu_handle_sys_reboot' kernel/reboot.c  || die "kernel/reboot.c 未打上 SUSFS 分派"
-# 确认 SELinux 三处改动**已经**打上 (这是 SUSFS 负责 SELinux 隐藏的前提)
-for f in security/selinux/avc.c security/selinux/hooks.c security/selinux/selinuxfs.c; do
-  grep -q 'CONFIG_KSU_SUSFS' "$f" || die "$f 没有 SUSFS 改动 (SELinux 隐藏会失效, 春秋可检出)"
+# 确认 SELinux 三处改动**已经**打上, 而且带的是真正的隐藏钩子。
+# 为什么查函数名而不是只查 CONFIG_KSU_SUSFS: 只含 include/extern 的 hunk 也算"有改动",
+# 但没有任何钩子挂上去 -> 隐藏等于没做。必须查到钩子函数本身才算数。
+# (历史事故: 早期脚本主动 strip 了这三处, FinaSU 在 CONFIG_KSU_SUSFS 下又是 return 0,
+#  两边都不接管 -> 管理器里开"隐藏 SELinux 修改"也没用, 春秋必报「检测到可疑SELinux」)
+for spec in \
+  "security/selinux/avc.c:ksu_selinux_hide_running" \
+  "security/selinux/hooks.c:handle_selinux_setprocattr" \
+  "security/selinux/hooks.c:my_setprocattr" \
+  "security/selinux/selinuxfs.c:handle_sel_write_access" \
+  "security/selinux/selinuxfs.c:handle_sel_write_context" \
+  "security/selinux/selinuxfs.c:ksu_selinux_hide_running" \
+  "security/selinux/selinuxfs.c:fake_status"; do
+  _f="${spec%%:*}"; _p="${spec#*:}"
+  grep -q "$_p" "$_f" || die "$_f 缺少 $_p —— SELinux 隐藏钩子没接上(春秋会报「检测到可疑SELinux」), 拒绝出包"
 done
-log "    已应用, 0 reject; SELinux 三处改动已保留 (SUSFS 负责 SELinux 隐藏)"
+log "    已应用, 0 reject; SELinux 三处改动已保留 (SUSFS 负责 SELinux 隐藏, 钩子校验通过)"
 
 # ------------------------------------------------------- 3. FinaSU 侧改动
 log "3/6 FinaSU 侧适配改动"
