@@ -47,7 +47,7 @@ KSU_EXPECTED_VERSION="${KSU_EXPECTED_VERSION:-33074}"
 APPLY_FENGCHI="${APPLY_FENGCHI:-1}"
 FENGCHI_PATCH_URL="${FENGCHI_PATCH_URL:-}"
 APPLY_SUSFS="${APPLY_SUSFS:-0}"
-SUSFS_REF="${SUSFS_REF:-}"            # 可选: 锁定 susfs4ksu 的提交/分支
+SUSFS_REF="${SUSFS_REF:-3f6aae536724af0df3dfa15f932034d14a5dbc5c}"  # 默认锁定 cctv18/susfs4oki 的 oki-android15-6.6 (SUSFS v2.3.0, 标准版: 带 sdcard monitor, 无 priority-uid-filter)
 SUSFS_APPLIED="${SUSFS_APPLIED:-0}"   # 由第 5 节置 1, 供后续校验/build-info 使用
 # APPLY_KSU=0: 内核里【不】集成 KernelSU。
 # 一加 Ace 6 这台机器的 root 是 init_boot ramdisk 里的 kernelsu.ko (LKM 模式,
@@ -414,7 +414,7 @@ fi
 
 # --------------------------- 5. SuSFS (默认关闭) -----------------------------
 # 严格 fail-fast 集成, 逻辑见 scripts/apply_susfs.sh:
-#   * 内核侧: susfs4ksu 官方 gki-android15-6.6 补丁 (要求零 fuzz, 否则直接失败)
+#   * 内核侧: cctv18/susfs4oki oki-android15-6.6 补丁 (SUSFS v2.3.0 标准版, 要求零 fuzz)
 #   * KSU 侧 : 自包含适配层 kernel/feature/susfs_adapter.c
 #              (上游 10_enable_susfs_for_ksu.patch 是给老版 KernelSU 写的,
 #               与 FolkSU/FinaSU 当前结构代差过大, 不用)
@@ -425,12 +425,12 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   SUSFS_DIR="$WORKDIR/susfs4ksu"
   [ -d "$SUSFS_DIR/kernel_patches" ] || {
     rm -rf "$SUSFS_DIR"
-    git clone --depth=1 --branch gki-android15-6.6 \
-      https://github.com/ShirkNeko/susfs4ksu.git "$SUSFS_DIR" \
-      || die "克隆 susfs4ksu 失败"
+    git clone --branch oki-android15-6.6 \
+      https://github.com/cctv18/susfs4oki.git "$SUSFS_DIR" \
+      || die "克隆 cctv18/susfs4oki 失败"
   }
   [ -f "$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch" ] \
-    || die "susfs4ksu 缺少 6.6 内核补丁"
+    || die "cctv18/susfs4oki 缺少 6.6 内核补丁"
 
   # 锁定/记录上游提交与版本 (SUSFS 上游不升版本号时, 只能靠 commit 复现)
   if [ -n "$SUSFS_REF" ]; then
