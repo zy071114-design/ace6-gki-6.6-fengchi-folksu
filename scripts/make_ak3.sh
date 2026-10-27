@@ -88,6 +88,12 @@ if [ "$(_bi_get SUSFS)" = "1" ] && [ "$(_bi_get SELINUX_HIDE)" != "1" ]; then
   exit 1
 fi
 
+# 出品要求 (硬性): 扫盘漏洞必须已修复 (mkutf8data.c 删除 ignore_init + 重生成 utf8data.c_shipped)
+if [ "$(_bi_get UNICODE_BYPASS_FIX)" != "1" ]; then
+  echo "[x] 出品要求不满足: UNICODE_BYPASS_FIX 不是 1 (扫盘/unicode 路径绕过未修复), 拒绝打包" >&2
+  exit 1
+fi
+
 if [ -f "$REPO_ROOT/work/out/build-info.txt" ]; then
   cp "$REPO_ROOT/work/out/build-info.txt" "$WORK/build-info.txt"
 fi

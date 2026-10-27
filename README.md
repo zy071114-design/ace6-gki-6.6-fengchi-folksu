@@ -110,6 +110,7 @@ python3 scripts/apk_sign.py /path/to/NewManager.apk
 | 3 | `boot_completed` 兜底启用 SELinux 隐藏（不依赖管理器开关、不依赖 `-EAGAIN` 之后的碰运气重试） | `scripts/selinux_force_enable.js` |
 | 4 | 查询路径去掉 `current_uid().val >= 10000`（`selinuxfs.c` 三处；`hooks.c` 的 `setprocattr` 保留，避免影响 init/zygote 域切换） | `scripts/selinux_all_uids.js` |
 | 5 | `build-info.txt` 必须 `SUSFS=1` → `SELINUX_HIDE=1`，打包前再校验一次 | `scripts/make_ak3.sh` |
+| 6 | **扫盘（unicode 路径绕过）修复**：`fs/unicode/mkutf8data.c` 必须已删掉 `ignore_init()` 且 `utf8data.c_shipped` 已重生成，`build-info.txt` 必须 `UNICODE_BYPASS_FIX=1`。构建时无条件执行并 `die` 断言，打包前再校验一次 | `scripts/build.sh` + `scripts/make_ak3.sh` |
 
 > **为什么第 4 条是硬性的**：Duck Detector 用 `android:zygotePreloadName` 把探针放进
 > **zygote 进程（uid 0）**里跑。保留 `uid >= 10000` 判断时它直接走原函数，读到的是真实策略，
@@ -122,7 +123,8 @@ python3 scripts/apk_sign.py /path/to/NewManager.apk
 1. **版本串**：`uname -r` 与目标一致。例：Ace6 6.6.89 =
    `6.6.89-android15-8-g11d7ebe61a81-abogki537459655-4k`；一加 13 =
    `6.6.89-android15-8-gf4dc45704e54-abogki446052083-4k`。
-2. **内核侧状态**：`su -c dmesg | grep -i selinux_hide` 必须出现
+2. **扫盘修复**：`build-info.txt` 里 `UNICODE_BYPASS_FIX=1`，且 `fs/unicode/utf8data.c_shipped` 已重生成（`a\u200Bb` 这类名字归一化后不得等价于 `ab`）。
+3. **内核侧状态**：`su -c dmesg | grep -i selinux_hide` 必须出现
    `selinux_hide: boot_completed enabled=1 running=1 backup=1`。
 3. **Duck Detector**：SELinux 项**不得为 Danger**；详情里不得出现
    `KSU context materialized`、`policyload/access seqno split`、
