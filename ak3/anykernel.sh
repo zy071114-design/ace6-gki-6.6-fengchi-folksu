@@ -71,13 +71,20 @@ if [ -L "/dev/block/bootdevice/by-name/init_boot_a" ] || [ -L "/dev/block/by-nam
     # magiskboot unpack 对"无 ramdisk"会返回 1，标准 split_boot 会把它当成失败
     # （实测日志: "Splitting image failed. Aborting..."）。
     # 这里做最小拆解: 只要求能解出 kernel 段, 不管有没有 ramdisk。
+    ui_print "[i] 检测到独立 init_boot, 仅替换内核 Image, 保留 ramdisk"
+    # GKI 的 boot 分区本身没有 ramdisk（ramdisk 在 init_boot），
+    # magiskboot unpack 对"无 ramdisk"会返回 1，标准 split_boot 会把它当成失败
+    # （实测日志: "Splitting image failed. Aborting..."）。
+    # 这里做最小拆解: 只要求能解出 kernel 段, 不管有没有 ramdisk。
+    # 注意: AK3 里 repack 读的是 $BOOTIMG（= $AKHOME/boot.img），不是 split_img/boot.img。
     CUSTOMDD="bs=1048576"
-    mkdir -p "$SPLITIMG"
     BLOCK_MAIN=$(echo "$BLOCK" | cut -d' ' -f1)
-    dd if="$BLOCK_MAIN" of="$SPLITIMG/boot.img" $CUSTOMDD 2>/dev/null \
+    rm -rf "$SPLITIMG"
+    mkdir -p "$SPLITIMG"
+    dd if="$BLOCK_MAIN" of="$BOOTIMG" $CUSTOMDD 2>/dev/null \
       || abort "Dumping image failed. Aborting..."
     cd "$SPLITIMG"
-    "$BIN/magiskboot" unpack -h boot.img > infotmp 2>&1 || true
+    "$BIN/magiskboot" unpack -h "$BOOTIMG" > infotmp 2>&1 || true
     [ -f kernel ] || abort "boot.img 里没有 kernel 段, 停止 (请确认分区)"
     cd "$AKHOME"
     flash_boot
