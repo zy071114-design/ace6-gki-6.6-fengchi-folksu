@@ -67,7 +67,19 @@ chmod -R 755 $AKHOME/tools
 # 因此只要存在 init_boot 就只替换内核, 绝不重打 ramdisk。
 if [ -L "/dev/block/bootdevice/by-name/init_boot_a" ] || [ -L "/dev/block/by-name/init_boot_a" ]; then
     ui_print "[i] 检测到独立 init_boot, 仅替换内核 Image, 保留 ramdisk"
-    split_boot
+    # GKI 的 boot 分区本身没有 ramdisk（ramdisk 在 init_boot），
+    # magiskboot unpack 对"无 ramdisk"会返回 1，标准 split_boot 会把它当成失败
+    # （实测日志: "Splitting image failed. Aborting..."）。
+    # 这里做最小拆解: 只要求能解出 kernel 段, 不管有没有 ramdisk。
+    CUSTOMDD="bs=1048576"
+    mkdir -p "$SPLITIMG"
+    BLOCK_MAIN=$(echo "$BLOCK" | cut -d' ' -f1)
+    dd if="$BLOCK_MAIN" of="$SPLITIMG/boot.img" $CUSTOMDD 2>/dev/null \
+      || abort "Dumping image failed. Aborting..."
+    cd "$SPLITIMG"
+    "$BIN/magiskboot" unpack -h boot.img > infotmp 2>&1 || true
+    [ -f kernel ] || abort "boot.img 里没有 kernel 段, 停止 (请确认分区)"
+    cd "$AKHOME"
     flash_boot
 else
     ui_print "[i] 未检测到 init_boot, 走完整流程"
