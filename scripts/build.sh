@@ -483,6 +483,57 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   bash "$REPO_ROOT/scripts/apply_susfs.sh" "$SUSFS_DIR" "$CFGFILE" \
     || die "SUSFS 集成失败 (见上方 [susfs] 输出)"
   SUSFS_APPLIED=1
+  # ---- 参考 KowSU: setprocattr 只做预校验, 不自己 commit_creds ----
+  # 现象: 管理器打开「隐藏 SELinux 修改」后开机卡第二屏 (整机冻住).
+  # 原因: FinaSU 的 my_setprocattr() 会对 uid>=10000 的进程直接
+  #       prepare_creds()/commit_creds() 换 SID; 开机早期这样改凭据会把系统带死.
+  # 参考内核 (KowSU 35801, 6.6.150 sun GKI) 的做法:
+  #       备份策略校验通过后, 永远交回 stock selinux_setprocattr, 不自己改凭据.
+  log "setprocattr 对齐参考内核 (只校验, 不改凭据)"
+  python3 - "$KSU_DIR" <<'PYSETPROC'
+import sys
+ksu = sys.argv[1]
+p = ksu + "/kernel/feature/selinux_hide.c"
+s = open(p, encoding='utf-8').read()
+start = s.find("    new = prepare_creds();")
+end_marker = "abort_change:\n    abort_creds(new);\n    return error;"
+end = s.find(end_marker, start)
+if start < 0 or end < 0:
+    sys.stderr.write("selinux_hide.c: 未找到待替换块\n")
+    sys.exit(1)
+end += len(end_marker)
+s = s[:start] + "    /* delegate: 不在这里改凭据, 交给 stock selinux_setprocattr */\n    return 0;" + s[end:]
+s = s.replace("    struct ksu_task_security_struct *tsec;\n", "")
+s = s.replace("    struct cred *new;\n", "")
+s = s.replace("u32 mysid, sid = 0, backup_sid, ptsid;", "u32 mysid, sid = 0, backup_sid;")
+open(p, "w", encoding='utf-8').write(s)
+print("patched selinux_hide.c (delegate)")
+
+h = "security/selinux/hooks.c"
+c = open(h, encoding='utf-8').read()
+old = """	if ((likely(!strcmp(name, "current") &&
+				current_uid().val >= 10000 &&
+				ksu_selinux_hide_running)))
+		return my_setprocattr(name, value, size);"""
+new = """	if ((likely(!strcmp(name, "current") &&
+				current_uid().val >= 10000 &&
+				ksu_selinux_hide_running))) {
+		int __del = my_setprocattr(name, value, size);
+		if (__del)
+			return __del;
+	}"""
+if old not in c:
+    sys.stderr.write("hooks.c: 未找到 handle_selinux_setprocattr 片段\n")
+    sys.exit(1)
+c = c.replace(old, new, 1)
+open(h, "w", encoding='utf-8').write(c)
+print("patched hooks.c (delegate)")
+PYSETPROC
+  grep -q "delegate: 不在这里改凭据" "$KSU_DIR/kernel/feature/selinux_hide.c" \
+    || die "setprocattr delegate 补丁未生效 (selinux_hide.c)"
+  grep -q "__del" security/selinux/hooks.c \
+    || die "setprocattr delegate 补丁未生效 (hooks.c)"
+
   # boot_completed 兜底再启用一次 SELinux 隐藏:
   #   backup_sepolicy 可能晚于 post-fs-data 才就绪(-EAGAIN), 或者管理器里
   #   「隐藏 SELinux 修改」开关没开 -> running 一直 false -> SUSFS 的钩子全部走原路径
