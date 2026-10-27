@@ -133,6 +133,20 @@ python3 scripts/apk_sign.py /path/to/NewManager.apk
    以及与之关联的「检测到 ROOT 权限」条目。
 5. **失败即止**：以上任一条不过，该包不许进发布目录，也不许改名当新版本发。
 
+### 二·补充：Duck 的「实验性时序」不算门禁
+
+Duck Detector 的 `App Zygote attr/current timing (experimental)` 这一项会判 Positive/Negative，
+但它是**微架构级噪声**，不是策略泄漏：
+
+- 实测同一套内核配置：Ace 6（6.6.118，CPU6）为 **Negative**（−52 ns）；Ace 5 Pro / 一加 13（6.6.89，CPU1/CPU2）为 **Positive**（+103~104 ns）。
+- **原厂 boot** 在同一台 Ace 5 Pro 上同样跑出 **Positive（+104 ns，A=729/B=625）** —— 说明该偏差与我们的内核无关。
+- 报告原文也写着：`Stock kernels also take different paths for A and B, and CPU/load can change the sign`、`Timing direction is supporting information, not proof of hiding`。
+
+判定规则：
+1. 只要 `Context validity oracle` 是 `00`（KSU 上下文全拒）、`DirtySepolicy` 无命中、`system_server execmem / ksu_file / lsposed_file` 全 `Denied`，就**视为内容干净，可以发布**；
+2. 若该时序项与原厂 boot 结论一致（同为 Positive 或同为 Negative），一律按**设备基线噪声**处理，不纳入门禁、不回炉；
+3. 只有当同一台机器上「原厂 Negative、我们内核 Positive」时，才需要继续查内核路径（曾用过的修法：让 uid≥10000 的 `/proc/self/attr/current` 写入走原厂 `selinux_setprocattr`，见 `scripts/selinux_setprocattr_stock.js`）。
+
 ### 三、事故备忘（防止回退到旧行为）
 
 | 症状 | 真实原因 | 修法 |
