@@ -329,6 +329,31 @@ fi
 
 # 版本串尾巴: 默认是 v1.2.1-<sha>@HEAD (detached 检出时 rev-parse --abbrev-ref 返回 HEAD)。
 # 改成 @三叶, 便于一眼确认是自己编的包。
+# ---------------------------------------------------------------------------
+# SELinux 时序对齐 (Duck Detector: APP_ZYGOTE_ATTR_TIMING)
+#   FinaSU my_setprocattr() 里, 以 '\n' 开头的 payload 走短路跳过
+#   security_context_to_sid_with_policy(), 而普通非法 context 会走一次解析;
+#   两者最终都返回 EINVAL, 但耗时差 ~100ns -> 探针判 POSITIVE -> SELinux DANGER。
+#   这里让两条路都做同一次解析(同一个失败路径), 行为不变、只对齐耗时。
+# ---------------------------------------------------------------------------
+if [ -f "$KSU_DIR/kernel/feature/selinux_hide.c" ]; then
+  log "对齐 SELinux setprocattr 时序 (去掉前导换行短路)"
+  python3 - "$KSU_DIR/kernel/feature/selinux_hide.c" <<'PYFIX'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = "if (size && str[0] && str[0] != '\\n') {"
+new = "if (size && str[0]) { /* timing-equalized: 前导换行也走同一解析路径 */"
+if old not in s:
+    sys.stderr.write("pattern not found in selinux_hide.c\n")
+    sys.exit(1)
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+print("patched selinux_hide.c")
+PYFIX
+  grep -q "timing-equalized" "$KSU_DIR/kernel/feature/selinux_hide.c" \
+    || die "selinux_hide.c 时序补丁失败"
+fi
+
 KSU_KBUILD="$KSU_DIR/kernel/Kbuild"
 if [ -f "$KSU_KBUILD" ]; then
   if grep -q '^KSU_VERSION_FULL :=' "$KSU_KBUILD"; then
