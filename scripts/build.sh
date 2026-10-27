@@ -479,6 +479,11 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   else
     warn "SELinux 附加补丁已关闭 (SELINUX_EXTRA=0): 仅保留三处 SUSFS 改动 + FinaSU 去 static"
   fi
+  # app 侧 attr/current 写入交回原厂 selinux_setprocattr:
+  # Duck 的 "App Zygote attr/current timing (experimental)" 会量 A/B 两条写入路径的耗时差,
+  # FinaSU 用 backup_sepolicy 解析会比原厂 live 策略多出几十~一百多纳秒 -> 被判 Positive -> SELinux 红。
+  node "$REPO_ROOT/scripts/selinux_setprocattr_stock.js" \
+    || die "SELinux setprocattr 原厂回退补丁失败"
 
 else
   warn "APPLY_SUSFS=0 -> 不集成 SuSFS"
