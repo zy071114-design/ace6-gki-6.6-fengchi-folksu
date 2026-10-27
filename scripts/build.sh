@@ -327,6 +327,19 @@ if [ -f "$REPO_ROOT/scripts/ksu_safe_mode_fixup.js" ]; then
     || die "音量键安全模式修正失败"
 fi
 
+# 版本串尾巴: 默认是 v1.2.1-<sha>@HEAD (detached 检出时 rev-parse --abbrev-ref 返回 HEAD)。
+# 改成 @三叶, 便于一眼确认是自己编的包。
+KSU_KBUILD="$KSU_DIR/kernel/Kbuild"
+if [ -f "$KSU_KBUILD" ]; then
+  if grep -q '^KSU_VERSION_FULL :=' "$KSU_KBUILD"; then
+    sed -i 's|^KSU_VERSION_FULL := .*|KSU_VERSION_FULL := v$(if $(KSU_VERSION_TAG),$(KSU_VERSION_TAG),unknown)-$(KSU_VERSION_SHA)@三叶|' "$KSU_KBUILD"
+    grep -q '@三叶' "$KSU_KBUILD" || die 'KSU_VERSION_FULL 改写失败'
+    echo "    KernelSU 版本串已改为 ...@三叶"
+  else
+    warn "Kbuild 里没有 KSU_VERSION_FULL, 跳过"
+  fi
+fi
+
 KSU_COMMITS="$(git -C "$KSU_DIR" rev-list --count HEAD)"
 KSU_VERSION="$((30000 + KSU_COMMITS))"
 
