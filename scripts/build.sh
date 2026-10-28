@@ -534,6 +534,55 @@ PYSETPROC
   grep -q "__del" security/selinux/hooks.c \
     || die "setprocattr delegate 补丁未生效 (hooks.c)"
 
+
+  # ---- 两边都不认时交回 stock: 恢复 A/B 的结构性耗时差 ----
+  # Duck Detector 的 APP_ZYGOTE_ATTR_TIMING 只在 median(A-B) > 0 时判 Danger。
+  # "timing-equalized" 之后 A/B 都停在"解析失败即返回"这一处, 差值趋近 0,
+  # 512 对取中位数后符号由噪声决定 -> 一次 POSITIVE(Danger) 一次 All Clear。
+  # 修法: 只有 backup 不认、live 认(需要掩盖类型存在)时就地 EINVAL;
+  #       两边都不认时返回 0, 让 hooks.c 落到 stock, 由 stock 自己失败
+  #       (A 在解析处早退, B 走 prepare_creds/abort_creds) —— 差值回到
+  #       stock 的微秒级、方向固定为负, 不再由噪声定符号。
+  log "setprocattr: 两边都不认时交回 stock (恢复 A/B 结构差)"
+  python3 - "$KSU_DIR" <<'PYSTOCKDLG'
+import sys
+p = sys.argv[1] + "/kernel/feature/selinux_hide.c"
+s = open(p, encoding='utf-8').read()
+old = """        if (backup_error || error)
+            return backup_error ?: error;"""
+new = """        if (backup_error || error) {
+            /* 两边都不认: stock 对同样的载荷也是 -EINVAL。返回 0 交给 stock,
+             * 让它走完自己的路径, 保持 stock 的结构性耗时差。
+             * 仅 backup 不认、live 认时才就地 -EINVAL, 掩盖该类型存在。 */
+            if (backup_error && error) {
+                if (stripped_nl) {
+                    str[size] = '\\n';
+                    size++;
+                }
+                return 0;
+            }
+            return backup_error ?: error;
+        }"""
+if old not in s:
+    sys.stderr.write("selinux_hide.c: 未找到 backup_error 返回块\n")
+    sys.exit(1)
+s = s.replace(old, new, 1)
+s = s.replace("""        if (str[size - 1] == '\\n') {
+            str[size - 1] = 0;
+            size--;
+        }""", """        if (str[size - 1] == '\\n') {
+            str[size - 1] = 0;
+            size--;
+            stripped_nl = 1;
+        }""", 1)
+s = s.replace("""    int error, backup_error;""", """    int error, backup_error;
+    int stripped_nl = 0;""", 1)
+open(p, 'w', encoding='utf-8').write(s)
+print("patched selinux_hide.c (stock-delegate)")
+PYSTOCKDLG
+  grep -q "stock 对同样的载荷也是 -EINVAL" "$KSU_DIR/kernel/feature/selinux_hide.c" \
+    || die "selinux_hide stock-delegate 补丁失败"
+
   # boot_completed 兜底再启用一次 SELinux 隐藏:
   #   backup_sepolicy 可能晚于 post-fs-data 才就绪(-EAGAIN), 或者管理器里
   #   「隐藏 SELinux 修改」开关没开 -> running 一直 false -> SUSFS 的钩子全部走原路径
