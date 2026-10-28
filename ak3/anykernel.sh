@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # AnyKernel3 刷机脚本 —— 一加 Ace 6 (PLQ110 / ossi / SM8750 "sun")
-# 内核: GKI 6.6 (官方 ace_6 源码) + 风驰 HMBIRD 调度类 + FolkSU(KernelSU, UAPI 5)
+# 内核: GKI 6.6 (官方 ace_6 源码) + 风驰 HMBIRD 调度类 + FinaSU(KernelSU, UAPI 6)
 #
 # 分区布局要点:
 #   * A/B 双槽 (IS_SLOT_DEVICE=1)
@@ -13,7 +13,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=Ace6 GKI 6.6 (fengchi + FolkSU)
+kernel.string=@DEV_NAME@
 do.devicecheck=0
 do.modules=0
 do.systemless=1
@@ -43,7 +43,7 @@ NO_VBMETA_PARTITION_PATCH=1
 
 ui_print " "
 ui_print "*******************************"
-ui_print " Ace6 GKI 6.6 + fengchi + FolkSU"
+ui_print " @DEV_NAME@ + fengchi + FinaSU"
 ui_print "*******************************"
 ui_print " "
 ui_print "!! 仅限 @DEV_IDS@ !!"
@@ -52,9 +52,9 @@ ui_print "!! (电源/温控/显示驱动不匹配) !!"
 ui_print " "
 ui_print "[i] Device : @DEV_NAME@"
 ui_print "[i] Kernel : GKI 6.6 official source + fengchi (HMBIRD)"
-ui_print "[i] Root   : FolkSU (KernelSU, UAPI=5)"
+ui_print "[i] Root   : FinaSU (KernelSU, UAPI=6)"
 ui_print " "
-ui_print "[i] 机型: @DEV_NAME@ / 内核: GKI 6.6 + 风驰 / Root: FolkSU"
+ui_print "[i] 机型: @DEV_NAME@ / 内核: 风驰 HMBIRD / Root: FinaSU"
 ui_print " "
 
 # 规避部分机型文件系统 I/O 延迟导致的二进制执行异常 (cctv18 同款加固)
@@ -67,7 +67,26 @@ chmod -R 755 $AKHOME/tools
 # 因此只要存在 init_boot 就只替换内核, 绝不重打 ramdisk。
 if [ -L "/dev/block/bootdevice/by-name/init_boot_a" ] || [ -L "/dev/block/by-name/init_boot_a" ]; then
     ui_print "[i] 检测到独立 init_boot, 仅替换内核 Image, 保留 ramdisk"
-    split_boot
+    # GKI 的 boot 分区本身没有 ramdisk（ramdisk 在 init_boot），
+    # magiskboot unpack 对"无 ramdisk"会返回 1，标准 split_boot 会把它当成失败
+    # （实测日志: "Splitting image failed. Aborting..."）。
+    # 这里做最小拆解: 只要求能解出 kernel 段, 不管有没有 ramdisk。
+    ui_print "[i] 检测到独立 init_boot, 仅替换内核 Image, 保留 ramdisk"
+    # GKI 的 boot 分区本身没有 ramdisk（ramdisk 在 init_boot），
+    # magiskboot unpack 对"无 ramdisk"会返回 1，标准 split_boot 会把它当成失败
+    # （实测日志: "Splitting image failed. Aborting..."）。
+    # 这里做最小拆解: 只要求能解出 kernel 段, 不管有没有 ramdisk。
+    # 注意: AK3 里 repack 读的是 $BOOTIMG（= $AKHOME/boot.img），不是 split_img/boot.img。
+    CUSTOMDD="bs=1048576"
+    BLOCK_MAIN=$(echo "$BLOCK" | cut -d' ' -f1)
+    rm -rf "$SPLITIMG"
+    mkdir -p "$SPLITIMG"
+    dd if="$BLOCK_MAIN" of="$BOOTIMG" $CUSTOMDD 2>/dev/null \
+      || abort "Dumping image failed. Aborting..."
+    cd "$SPLITIMG"
+    "$BIN/magiskboot" unpack -h "$BOOTIMG" > infotmp 2>&1 || true
+    [ -f kernel ] || abort "boot.img 里没有 kernel 段, 停止 (请确认分区)"
+    cd "$AKHOME"
     flash_boot
 else
     ui_print "[i] 未检测到 init_boot, 走完整流程"
@@ -82,6 +101,6 @@ fi
 ## end boot install
 
 ui_print " "
-ui_print "[OK] 刷入完成, 重启后用 FolkSU 管理器确认 Root (应显示 32783-5)"
-ui_print "[OK] Done. Reboot and check root with the FolkSU manager."
+ui_print "[OK] 刷入完成, 重启后用 FinaSU 管理器确认 Root (应显示 32960-6)"
+ui_print "[OK] Done. Reboot and check root with the FinaSU manager (32960 / uapi 6)."
 ui_print " "

@@ -51,22 +51,49 @@ log "写入机型专用 anykernel.sh"
 cp "$REPO_ROOT/ak3/anykernel.sh" "$WORK/anykernel.sh"
 # 按机型替换占位符 (sed 用 | 作分隔符 —— DEV_IDS 里含 '/' 不会破坏替换)
 sed -i "s|@DEV_NAME@|${DEV_NAME:-一加 Ace 6}|g; s|@DEV_IDS@|${DEV_IDS:-PLQ110/ossi/SM8750}|g" "$WORK/anykernel.sh"
+# 标题行也按机型来, 否则会印着别的机型的内核名
+sed -i "s|^kernel.string=.*|kernel.string=${DEV_NAME:-Ace6 GKI 6.6}|" "$WORK/anykernel.sh"
 chmod 755 "$WORK/anykernel.sh"
 
 log "放入内核镜像"
 cp "$IMAGE" "$WORK/Image"
+
+# 功能清单按构建实际内容生成 (别再写死: 之前把没编进去的 BBG/BTF 也写上了)
+_BI="$REPO_ROOT/work/out/build-info.txt"
+_bi_get() { [ -f "$_BI" ] && sed -n "s/^$1=//p" "$_BI" | head -1; }
+_KVER="$(_bi_get KSU_VERSION)"
+_FEAT=""
+[ "$(_bi_get FENGCHI)" = "1" ] && _FEAT="风驰(HMBIRD)调度"
+[ "$(_bi_get SUSFS)" = "1" ] && _FEAT="${_FEAT:-}${_FEAT:+ / }SUSFS 隐藏"
+[ -n "${_KVER:-}" ] && _FEAT="${_FEAT:-}${_FEAT:+ / }内置 FinaSU root (${_KVER}, UAPI $(_bi_get KSU_UAPI))"
+[ -z "${_FEAT:-}" ] && _FEAT="GKI 6.6 官方源码"
 
 log "写入适用机型说明 (防止刷错机)"
 cat > "$WORK/README-刷机须知.txt" <<EOF
 【${DEV_NAME:-一加 Ace 6} 专用内核 (${DEV_IDS:-PLQ110/ossi/SM8750})】
 * 本包仅适用于 ${DEV_NAME:-一加 Ace 6} (${DEV_IDS:-PLQ110/ossi/SM8750})。
 * 其他 6.6 设备/机型严禁刷入: 电源/充电/温控/显示驱动不匹配, 刷入后必现随机重启。
-* 已实测验证: 风驰调度 / 内置 FolkSU root / TCP 增强 / BBG / BTF。
+* 本包实际内容: ${_FEAT}。
+* 内核版本: $(_bi_get UTS_RELEASE)  源码分支: $(_bi_get KERNEL_BRANCH)
 * 刷入前务必备份当前 boot_a 分区, 以便随时回滚。
 EOF
 
 # 构建信息只作为独立文件放进 zip (绝不能 append 到 anykernel.sh:
 # 里面的 "BUILT_AT=2026-10-10 15:21:39 UTC" 不是合法 shell 赋值, 会让安装器报错)
+# 出品要求 (硬性): SUSFS=1 的包, build-info 里必须有 SELINUX_HIDE=1。
+# 少了它等于 SUSFS 的 SELinux 钩子没编进去 -> Duck Detector / 春秋 会报
+# 「Enabling with KSU context materialized」/「检测到可疑 SELinux」。
+if [ "$(_bi_get SUSFS)" = "1" ] && [ "$(_bi_get SELINUX_HIDE)" != "1" ]; then
+  echo "[x] 出品要求不满足: SUSFS=1 但 SELINUX_HIDE 不是 1 (SELinux 隐藏缺失), 拒绝打包" >&2
+  exit 1
+fi
+
+# 出品要求 (硬性): 扫盘漏洞必须已修复 (mkutf8data.c 删除 ignore_init + 重生成 utf8data.c_shipped)
+if [ "$(_bi_get UNICODE_BYPASS_FIX)" != "1" ]; then
+  echo "[x] 出品要求不满足: UNICODE_BYPASS_FIX 不是 1 (扫盘/unicode 路径绕过未修复), 拒绝打包" >&2
+  exit 1
+fi
+
 if [ -f "$REPO_ROOT/work/out/build-info.txt" ]; then
   cp "$REPO_ROOT/work/out/build-info.txt" "$WORK/build-info.txt"
 fi

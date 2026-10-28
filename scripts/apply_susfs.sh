@@ -62,18 +62,25 @@ cp "$KP/include/linux/susfs_def.h" include/linux/susfs_def.h || die "拷贝 susf
 # ------------------------------------------------------------ 2. 内核侧补丁
 log "2/6 应用内核侧补丁"
 
-# 关键: 先摘掉 SUSFS 对 security/selinux/{avc,hooks,selinuxfs}.c 的改动。
-# FinaSU 自己已经用另一套机制实现了同样的 SELinux 隐藏:
-#   selinux_hide.c 运行时 patch sel_handle_status_ops->open + LSM hook setprocattr
-#   avc_spoof.c    kprobe 拦 slow_avc_audit
-# SUSFS 又在源码层改同一批函数 -> 两层叠加, SELinux 对外行为与原包不同,
-# 会被"春秋检测"之类工具判为可疑 SELinux (实测: 不带 SUSFS 的原包不报, 带则报)。
-# 摘除后 SELinux 行为回到与 FinaSU 原包一致, SUSFS 其余功能全部保留。
+# 保留 SUSFS 对 security/selinux/{avc,hooks,selinuxfs}.c 的改动 —— 必须保留:
+#   FinaSU 的 selinux_hide.c 在 CONFIG_KSU_SUSFS 下是 **直接 return 0** 的空实现
+#   ("#ifdef CONFIG_KSU_SUSFS / return 0;"), 即它主动把 SELinux 隐藏让给 SUSFS。
+#   早期我们为了"避免两层叠加"剥掉了这三处, 结果两边都没做 -> 春秋检测必然命中
+#   「检测SELinux Policy时发现可疑问题」, 且管理器里开"隐藏 SELinux 修改"也没用。
 P50_USE="$P50"
-P50_STRIPPED="$WORKDIR_TMP/50_susfs_no_selinux.patch"
 mkdir -p "$WORKDIR_TMP"
-node "$SCRIPT_DIR/strip_selinux_hunks.js" "$P50" "$P50_STRIPPED" || die "摘除 SELinux 改动失败"
-P50_USE="$P50_STRIPPED"
+
+# 已知基线差异 (v_15 / 6.6.66 实测): fs/proc/base.c 里没有 <linux/dma-buf.h>,
+# 而补丁正是拿它当锚点插入 susfs_def.h 的 include -> hunk#1 必然失败。
+# 这里先按同样的位置补上这一行, 让上下文对上 (补的是标准 include, 无副作用)。
+if [ -f fs/proc/base.c ] && ! grep -q '<linux/dma-buf.h>' fs/proc/base.c; then
+  awk '{print} /#include <linux\/cpufreq_times.h>$/{print "#include <linux/dma-buf.h>"}' \
+    fs/proc/base.c > "$WORKDIR_TMP/base.c.new" \
+    && mv "$WORKDIR_TMP/base.c.new" fs/proc/base.c || die "预修 fs/proc/base.c 失败"
+  grep -q '<linux/dma-buf.h>' fs/proc/base.c \
+    && echo "    预修: fs/proc/base.c 补入 <linux/dma-buf.h> (该基线缺这一行)" \
+    || die "预修 fs/proc/base.c 未生效"
+fi
 
 # 两个坑 (都是实测踩到的):
 #   1) toybox patch 的 --dry-run **仍会改文件**, 所以不能拿它当"纯预检";
@@ -93,11 +100,24 @@ REJ="$(find . -name '*.rej' -not -path './.git/*' | wc -l)"
 grep -q 'susfs.o' fs/Makefile                    || die "fs/Makefile 未挂入 susfs.o (补丁没生效?)"
 grep -q 'ksu_is_input_hook_enabled' drivers/input/input.c || die "drivers/input/input.c 未打上输入钩子"
 grep -q 'ksu_handle_sys_reboot' kernel/reboot.c  || die "kernel/reboot.c 未打上 SUSFS 分派"
-# 反向确认: 三个 SELinux 文件必须**没有**被 SUSFS 改动 (否则又会和 FinaSU 打架)
-for f in security/selinux/avc.c security/selinux/hooks.c security/selinux/selinuxfs.c; do
-  grep -q 'CONFIG_KSU_SUSFS' "$f" && die "$f 仍被 SUSFS 改动 (会与 FinaSU 的 SELinux 隐藏冲突)"
+# 确认 SELinux 三处改动**已经**打上, 而且带的是真正的隐藏钩子。
+# 为什么查函数名而不是只查 CONFIG_KSU_SUSFS: 只含 include/extern 的 hunk 也算"有改动",
+# 但没有任何钩子挂上去 -> 隐藏等于没做。必须查到钩子函数本身才算数。
+# (历史事故: 早期脚本主动 strip 了这三处, FinaSU 在 CONFIG_KSU_SUSFS 下又是 return 0,
+#  两边都不接管 -> 管理器里开"隐藏 SELinux 修改"也没用, 春秋必报「检测到可疑SELinux」)
+for spec in \
+  "security/selinux/avc.c:susfs_is_avc_log_spoofing_enabled" \
+  "security/selinux/avc.c:bypass_orig_flow" \
+  "security/selinux/hooks.c:handle_selinux_setprocattr" \
+  "security/selinux/hooks.c:my_setprocattr" \
+  "security/selinux/selinuxfs.c:handle_sel_write_access" \
+  "security/selinux/selinuxfs.c:handle_sel_write_context" \
+  "security/selinux/selinuxfs.c:ksu_selinux_hide_running" \
+  "security/selinux/selinuxfs.c:fake_status"; do
+  _f="${spec%%:*}"; _p="${spec#*:}"
+  grep -q "$_p" "$_f" || die "$_f 缺少 $_p —— SELinux 隐藏钩子没接上(春秋会报「检测到可疑SELinux」), 拒绝出包"
 done
-log "    已应用, 0 reject; SELinux 三个文件保持原样 (交给 FinaSU 自己的机制)"
+log "    已应用, 0 reject; SELinux 三处改动已保留 (SUSFS 负责 SELinux 隐藏, 钩子校验通过)"
 
 # ------------------------------------------------------- 3. FinaSU 侧改动
 log "3/6 FinaSU 侧适配改动"
@@ -117,8 +137,8 @@ log "    KernelSU 源根: $KS"
 SH="$KS/feature/selinux_hide.c"
 [ -f "$SH" ] || die "找不到 $SH"
 for sym in ksu_selinux_hide_enabled ksu_selinux_hide_running; do
-  grep -q "static bool $sym" "$SH" || die "$SH: 未找到 'static bool $sym'"
-  sed -i "s/^static bool $sym/bool $sym/" "$SH"
+  grep -qE "^(static bool|bool|extern bool) $sym" "$SH" || die "$SH: 找不到 $sym 定义"
+  sed -i "s/^static bool $sym/bool $sym/" "$SH"   # 已是全局时为空操作
 done
 sed -i 's/^static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key)/DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key)/' "$SH"
 sed -i 's/^static struct page \*fake_status = NULL/struct page *fake_status = NULL/' "$SH"
@@ -151,9 +171,13 @@ SC="$KS/feature/sucompat.c"; SCH="$KS/feature/sucompat.h"
 [ -f "$SC" ] || die "找不到 $SC"
 grep -q 'bool ksu_su_compat_enabled' "$SC" || die "$SC: 未找到 bool ksu_su_compat_enabled"
 sed -i 's/^bool ksu_su_compat_enabled __read_mostly = true;/DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled);/' "$SC"
-grep -q 'DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)' "$SC" || die "$SC: 静态键定义失败"
-sed -i 's/^extern bool ksu_su_compat_enabled;/extern struct static_key_true ksu_su_compat_enabled;/' "$SCH"
-grep -q 'extern struct static_key_true ksu_su_compat_enabled;' "$SCH" || die "$SCH: extern 改型失败"
+if grep -q 'static_branch_likely(&ksu_su_compat_enabled)' "$SCH"; then
+  echo "    sucompat.h 已自带 CONFIG_KSU_SUSFS 双分支, 跳过头文件改写"
+else
+  sed -i 's/^extern bool ksu_su_compat_enabled;/extern struct static_key_true ksu_su_compat_enabled;/' "$SCH"
+  grep -q 'extern struct static_key_true ksu_su_compat_enabled;' "$SCH" || die "$SCH: extern 改型失败"
+  include_static_key "$SCH"
+fi
 # 把运行时赋值改成静态键开关
 sed -i 's/^\( *\)ksu_su_compat_enabled = enable;/\1if (enable)\n\1\tstatic_branch_enable(\&ksu_su_compat_enabled);\n\1else\n\1\tstatic_branch_disable(\&ksu_su_compat_enabled);/' "$SC"
 if grep -qE '^[[:space:]]*ksu_su_compat_enabled[[:space:]]*=' "$SC"; then
@@ -179,7 +203,7 @@ fi
 # 合法形式只有: static_branch_*() 读取 / DEFINE_STATIC_KEY_* 定义 /
 #               extern struct static_key_true 声明。
 BADKEY="$(grep -rnE '(^|[^_a-zA-Z])ksu_su_compat_enabled' "$KS" --include=*.c --include=*.h 2>/dev/null \
-  | grep -vE 'static_branch_(likely|unlikely|enable|disable)|DEFINE_STATIC_KEY|extern struct static_key_true' || true)"
+  | grep -vE 'static_branch_(likely|unlikely|enable|disable)|static_key_enabled|DEFINE_STATIC_KEY|extern struct static_key_true|sucompat\.h:' || true)"
 if [ -n "$BADKEY" ]; then
   echo "$BADKEY" | sed 's/^/    /'
   die "$KS: 仍有把静态键当布尔裸用的地方 (会编译失败)"
@@ -196,16 +220,18 @@ log "    ksu_su_compat_enabled -> static_key_true (赋值/读取均已改写)"
 # 语义正确 —— 因此保留原名、仅加第 3 参是最小且安全的做法。
 SHOOK="$KS/hook/setuid_hook.c"; SHOOKH="$KS/hook/setuid_hook.h"
 [ -f "$SHOOK" ] || die "找不到 $SHOOK"
-sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)/' "$SHOOK"
-grep -q '^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)$' "$SHOOK" \
-  || die "$SHOOK: 追加第 3 参失败"
-sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid);$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);/' "$SHOOKH"
-grep -q 'int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);' "$SHOOKH" \
-  || die "$SHOOKH: 头文件改签名失败"
-# 确保函数体里没有残留的未定义名字 (改名方案已弃用, 这里只做完整性确认)
-# 注意: Android 的 toybox grep 不认 \b, 用 POSIX 字符类
-if grep -qE '(^|[^_a-zA-Z])(ruid|euid)([^_a-zA-Z]|$)' "$SHOOK"; then
-  die "$SHOOK: 函数体里出现了不该有的 ruid/euid (改名残留)"
+if grep -qE '^int ksu_handle_setresuid\(uid_t [^,]+, uid_t [^,]+, uid_t [^)]+\)$' "$SHOOK"; then
+  log "    ksu_handle_setresuid 已是 3 参 (v1.2.x), 跳过"
+else
+  sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)/' "$SHOOK"
+  grep -q '^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)$' "$SHOOK" \
+    || die "$SHOOK: 追加第 3 参失败"
+  sed -i 's/^int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid);$/int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);/' "$SHOOKH"
+  grep -q 'int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid);' "$SHOOKH" \
+    || die "$SHOOKH: 头文件改签名失败"
+  if grep -qE '(^|[^_a-zA-Z])(ruid|euid)([^_a-zA-Z]|$)' "$SHOOK"; then
+    die "$SHOOK: 函数体里出现了不该有的 ruid/euid (改名残留)"
+  fi
 fi
 BE="$KS/hook/syscall_event_bridge.c"
 [ -f "$BE" ] && sed -i 's/ksu_handle_setresuid(old_uid, current_uid().val)/ksu_handle_setresuid(old_uid, current_uid().val, current_uid().val)/' "$BE"
@@ -336,6 +362,12 @@ SEOF
   log "    SUSFS SID 块 -> selinux.c; 声明 -> selinux.h; 初始化 -> rules.c"
 fi
 
+# FinaSU v1.2.x 起自带 SUSFS 对接扩展 (kernel/extension/susfs.c),
+# 它已经提供 ksu_handle_sys_reboot / ksu_is_input_hook_enabled 等全部符号;
+# 再写我们自己的适配层会重复定义 -> 链接期 duplicate symbol。
+if [ -f "$KS/extension/susfs.c" ]; then
+  log "4/6 FinaSU 自带 kernel/extension/susfs.c, 跳过自写适配层"
+else
 # ---------------------------------------------------------- 4. 适配层
 log "4/6 写 KSU 适配层 feature/susfs_adapter.c"
 
@@ -516,6 +548,7 @@ grep -q 'kernelsu-objs' "$KB" || die "$KB 不是 KernelSU 的 Kbuild (无 kernel
 grep -q 'susfs_adapter.o' "$KB" || printf 'kernelsu-objs += feature/susfs_adapter.o\n' >> "$KB"
 grep -q 'susfs_adapter.o' "$KB" || die "$KB: 未挂入 susfs_adapter.o"
 log "    已挂入 $KB"
+fi
 
 # ------------------------------------------------------------- 5. 配置
 log "5/6 写入 SUSFS 标准全套配置 -> $CFGFILE"
@@ -593,11 +626,15 @@ log "6/6 最终校验"
 [ -f include/linux/susfs.h ]                         || die "include/linux/susfs.h 丢失"
 [ -f include/linux/susfs_def.h ]                     || die "include/linux/susfs_def.h 丢失"
 grep -q '^obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile || die "fs/Makefile 未挂 susfs.o"
-grep -q 'ksu_handle_setresuid(uid_t old_uid, uid_t new_uid, uid_t suid)' "$KS/hook/setuid_hook.c" || die "setresuid 第 3 参未生效"
+grep -qE '^int ksu_handle_setresuid\(uid_t [^,]+, uid_t [^,]+, uid_t [^)]+\)$' "$KS/hook/setuid_hook.c" || die "setresuid 不是 3 参签名"
 grep -q 'DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)' "$KS/feature/sucompat.c"          || die "su_compat 静态键未生效"
 grep -qE '^bool ksu_selinux_hide_running' "$KS/feature/selinux_hide.c"                   || die "selinux_hide 去 static 未生效"
-grep -q 'susfs_adapter.o' "$KB"                                                    || die "适配层未挂入构建"
-grep -q "ksu_handle_sys_reboot" "$KS/feature/susfs_adapter.c"                            || die "适配层缺少 reboot 分派"
+if [ -f "$KS/extension/susfs.c" ]; then
+  grep -q "ksu_handle_sys_reboot" "$KS/extension/susfs.c" || die "官方 SUSFS 扩展缺少 reboot 分派"
+else
+  grep -q 'susfs_adapter.o' "$KB" || die "适配层未挂入构建"
+  grep -q "ksu_handle_sys_reboot" "$KS/feature/susfs_adapter.c" || die "适配层缺少 reboot 分派"
+fi
 if grep -q 'ksu_handle_execveat(' fs/exec.c; then die "fs/exec.c 仍有 sucompat 钩子残留"; fi
 grep -q 'CONFIG_KSU_SUSFS=y' "$CFGFILE"                                            || die "配置未写入"
 

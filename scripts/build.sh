@@ -10,7 +10,8 @@
 #                (OPlus HMBIRD 调度类: 以 hmbird 取代 AOSP sched_ext,
 #                 SCHED_EXT -> SCHED_HMBIRD, CONFIG_SCHED_CLASS_EXT ->
 #                 CONFIG_HMBIRD_SCHED, 新增 kernel/sched/hmbird/)
-#   * Root     : FolkSU (KernelSU fork, KERNEL_SU_UAPI_VERSION = 5)
+#   * Root     : FinaSU (KernelSU fork, KERNEL_SU_UAPI_VERSION = 6)
+#                FinaSU = FolkSU 原仓库 (LyraVoid/FinaSU) 改名后的新版本;
 #                并把指定 APK 的签名设为内核侧受信任管理器
 #
 # 用法:  bash scripts/build.sh        (仓库根目录执行)
@@ -29,15 +30,24 @@ mkdir -p "$WORKDIR"
 # ------------------------------ CONFIG --------------------------------------
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750.git}"
 KERNEL_BRANCH="${KERNEL_BRANCH:-oneplus/sm8750_b_16.0.0_ace_6}"
+# KERNEL_REF: 可选, 指定提交号(或 tag)时按该提交检出, 用于编"历史版本"
+# (例如 Ace5 Pro 的 ROM 内核是 6.6.30, 需要从分支历史里取 6.6.30 那个提交)
+KERNEL_REF="${KERNEL_REF:-}"
 KERNEL_DIR="${KERNEL_DIR:-common}"
 
-FOLKSU_REPO="${FOLKSU_REPO:-https://github.com/LyraVoid/FolkSU.git}"
-# v0.1.0-beta3: 提交数 2787 -> KSU_VERSION = 30000+2787 = 32787 (与管理器 APK 版本号一致)
-FOLKSU_TAG="${FOLKSU_TAG:-v0.1.0-beta3}"
-KSU_EXPECTED_VERSION="${KSU_EXPECTED_VERSION:-32787}"
+# FinaSU/FolkSU 是同一仓库 (github.com/LyraVoid/FinaSU): FolkSU v0.1.0-beta3 之后
+# 项目改名 FinaSU, 并在 v1.0.4 把 KERNEL_SU_UAPI_VERSION 由 5 提到 6。
+# 管理器 (FinaSU_v1.0.4_32960) 会拒绝对接 UAPI=5 的内核 (ksud 报 "UAPI version mismatch"),
+# 所以必须改用 v1.0.4 的内核侧代码重编, 不能沿用 FolkSU 的驱动。
+KSU_REPO="${KSU_REPO:-https://github.com/LyraVoid/FinaSU.git}"
+# v1.0.4: 提交数 2960 -> KSU_VERSION = 30000+2960 = 32960 (与 APK versionCode 32960 一致)
+KSU_TAG="${KSU_TAG:-v1.2.1}"
+KSU_EXPECTED_VERSION="${KSU_EXPECTED_VERSION:-33074}"
 
 APPLY_FENGCHI="${APPLY_FENGCHI:-1}"
+FENGCHI_PATCH_URL="${FENGCHI_PATCH_URL:-}"
 APPLY_SUSFS="${APPLY_SUSFS:-0}"
+SUSFS_REF="${SUSFS_REF:-}"            # 可选: 锁定 susfs4ksu 的提交/分支
 SUSFS_APPLIED="${SUSFS_APPLIED:-0}"   # 由第 5 节置 1, 供后续校验/build-info 使用
 # APPLY_KSU=0: 内核里【不】集成 KernelSU。
 # 一加 Ace 6 这台机器的 root 是 init_boot ramdisk 里的 kernelsu.ko (LKM 模式,
@@ -70,9 +80,12 @@ TCP_DEFAULT_CONG="${TCP_DEFAULT_CONG:-cubic}"
 # (configs/ref-6.6.150.config, 来自参考内核运行时 /proc/config.gz)。这样把"配置"这个
 # 变量彻底从对照实验里拿掉: 剩下的差异只有 源码树 / 工具链 / LOCALVERSION 三项。
 USE_REF_CONFIG="${USE_REF_CONFIG:-0}"
+EXTRA_CONFIG="${EXTRA_CONFIG:-}"
 REF_CONFIG_FILE="${REF_CONFIG_FILE:-$REPO_ROOT/configs/ref-6.6.150.config}"
 
-# FolkSU 管理器证书的 (长度, SHA-256), 用 scripts/apk_sign.py 从 APK 提取
+# 管理器证书的 (长度, SHA-256) —— 取自 v2 签名里第一张 certificate (DER) 的 sha256。
+# 实测: FinaSU_v1.0.4_32960-release.apk 的证书 == 旧 FolkSU 管理器的证书 (同一把密钥),
+# 所以沿用 0x2cc/2d89b50a… 即可; 只有换别的管理器时才需要重算。
 KSU_EXPECTED_SIZE="${KSU_EXPECTED_SIZE:-0x2cc}"
 KSU_EXPECTED_HASH="${KSU_EXPECTED_HASH:-2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458}"
 
@@ -88,6 +101,7 @@ KSU_EXPECTED_HASH="${KSU_EXPECTED_HASH:-2d89b50aaf1db013c2b6738f973f48b62ea21a3a
 # 注: vendor_dlkm 里还有 -o-4k / -o-g1524d9b076be-4k 两种旧串, 内核侧的 same_magic() 在
 #     CONFIG_MODVERSIONS 下会忽略版本段, 所以这里取"出厂串"是为了满足 system_dlkm 那一侧。
 LOCALVERSION_SUFFIX="${LOCALVERSION_SUFFIX:--android15-8-g9bc34d5b0c79-abogki537459655-4k}"
+KEEP_LOCALVERSION_AUTO="${KEEP_LOCALVERSION_AUTO:-0}"   # 1=保留 LOCALVERSION_AUTO=y (MODULE_SCMVERSION 的依赖)
 
 CLANG_VER="${CLANG_VER:-18}"
 # 工具链选择:
@@ -101,8 +115,9 @@ JOBS="${JOBS:-$(nproc --all)}"
 BUILD_TARGET="${BUILD_TARGET:-Image}"
 INSTALL_DEPS="${INSTALL_DEPS:-0}"
 
-export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-ace6}"
-export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-gki-builder}"
+# 构建者/主机名要伪装成原厂, 否则 /proc/version 里 (ace6@gki-builder) 会暴露环境
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-kleaf}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-build-host}"
 export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(date -u '+%Y-%m-%d %H:%M:%S UTC')}"
 
 # --------------------------- 依赖安装 (可选) ---------------------------------
@@ -140,7 +155,30 @@ if [ ! -d "$KERNEL_DIR/.git" ]; then
   log "克隆 OnePlus 官方 Ace 6 内核源码"
   echo "    仓库: $KERNEL_REPO"
   echo "    分支: $KERNEL_BRANCH"
-  git clone --depth=1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
+  if [ -n "$KERNEL_REF" ]; then
+    # GitHub 不允许按"未广告的 SHA"直接 fetch (会报 couldn't find remote ref),
+    # 因此改为下载 codeload 归档 (支持任意 commit), 再本地 git init 生成工作树+索引,
+    # 这样后面的 git apply / .git/info/exclude 仍然可用。
+    echo "    提交: $KERNEL_REF (按提交下载归档)"
+    _ARCH="$(mktemp -d)"
+    _URL="${KERNEL_REPO%.git}"
+    _URL="${_URL/github.com/codeload.github.com}"
+    curl -fsSL --retry 3 -o "$_ARCH/src.zip" "$_URL/zip/$KERNEL_REF" \
+      || die "下载源码归档失败: $_URL/zip/$KERNEL_REF"
+    mkdir -p "$KERNEL_DIR"
+    unzip -q "$_ARCH/src.zip" -d "$_ARCH/x" || die "解压源码归档失败"
+    _TOP="$(ls -d "$_ARCH"/x/*/ | head -1)"
+    [ -n "$_TOP" ] || die "源码归档结构异常"
+    shopt -s dotglob 2>/dev/null || true
+    mv "$_TOP"* "$KERNEL_DIR"/ || die "移动源码失败"
+    rm -rf "$_ARCH"
+    git -C "$KERNEL_DIR" init -q .
+    git -C "$KERNEL_DIR" -c user.name=ci -c user.email=ci@local add -A >/dev/null 2>&1
+    git -C "$KERNEL_DIR" -c user.name=ci -c user.email=ci@local commit -qm "vendor-source@$KERNEL_REF" >/dev/null 2>&1 || true
+    echo "    已在本地建立 git 索引 (HEAD=$(git -C "$KERNEL_DIR" rev-parse --short HEAD 2>/dev/null))"
+  else
+      git clone --depth=1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
+  fi
 else
   log "复用已存在的 $KERNEL_DIR"
 fi
@@ -151,6 +189,32 @@ SRC_HEAD="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 log "基线: Linux $BASE_VERSION  提交 $SRC_HEAD"
 git log -1 --pretty='    %s' 2>/dev/null || true
 
+# ------------------- 1b. unicode 路径绕过修复 (CVE-2024-50089 类) ------------
+# 去掉 utf8 规范化里对"可忽略码点"(Default_Ignorable_Code_Point) 的特殊处理:
+# 否则带隐藏字符的文件名可以绕过按字符串匹配的路径隐藏/过滤 ("unicode 扫盘")。
+# 补丁来自 Numbersf/Action-Build 的 patches/unicode_bypass_fix_6.1+.patch。
+UNICODE_FIX_APPLIED=0
+UNI_PATCH="$REPO_ROOT/patches/unicode_bypass_fix_6.1+.patch"
+if [ -f "$UNI_PATCH" ]; then
+  log "应用 unicode 路径绕过修复"
+  if git apply -p1 --whitespace=nowarn "$UNI_PATCH" 2>/dev/null; then
+    echo "    git apply 成功"
+    UNICODE_FIX_APPLIED=1
+  elif patch -p1 -F3 --no-backup-if-mismatch -i "$UNI_PATCH" >/dev/null 2>&1; then
+    echo "    patch -F3 成功"
+    UNICODE_FIX_APPLIED=1
+  else
+    find . -name '*.rej' -not -path './.git/*' -delete
+    warn "unicode 修复补丁应用失败 (不影响其它功能, 但漏洞仍在)"
+  fi
+  if [ "$UNICODE_FIX_APPLIED" = "1" ]; then
+    grep -q 'ignore_init' fs/unicode/mkutf8data.c && die "unicode 修复未生效 (mkutf8data.c 仍含 ignore_init)"
+    echo "    fs/unicode/{mkutf8data.c,utf8data.c_shipped} 已更新"
+  fi
+else
+  warn "缺少 patches/unicode_bypass_fix_6.1+.patch, 跳过"
+fi
+
 # --------------------------- 2. 风驰内核补丁 ---------------------------------
 if [ "$APPLY_FENGCHI" = "1" ]; then
   log "移植风驰内核 (HMBIRD 调度类)"
@@ -158,8 +222,32 @@ if [ "$APPLY_FENGCHI" = "1" ]; then
   # 19 处基线漂移已逐条解决, 并验证 git apply 0 reject
   PATCH_FILE="$REPO_ROOT/patches/fengchi-ace6.patch"
   [ -f "$PATCH_FILE" ] || PATCH_FILE="$REPO_ROOT/patches/fengchi.patch"
+  # 机型专用补丁 (Ace 5 Pro / 一加13 等 A15 v_* 线): 直接下载, 优先级最高。
+  # 这类补丁自带 include/linux/sched/hmbird.h, 且会顺手把 gki_defconfig 换成 HMBIRD。
+  if [ -n "$FENGCHI_PATCH_URL" ]; then
+    PATCH_FILE="$WORKDIR/fengchi-machine.patch"
+    mkdir -p "$WORKDIR"
+    curl -fsSL --retry 3 -o "$PATCH_FILE" "$FENGCHI_PATCH_URL" \
+      || die "下载机型专用风驰补丁失败: $FENGCHI_PATCH_URL"
+    echo "    机型专用补丁: $(basename "$FENGCHI_PATCH_URL") ($(wc -c < "$PATCH_FILE") 字节)"
+  fi
   [ -f "$PATCH_FILE" ] || die "找不到风驰补丁"
   echo "    补丁: $(basename "$PATCH_FILE")"
+
+  # 6.6.30 等历史基线的树里没有 include/linux/sched/hmbird.h,
+  # 而补丁是"修改"它(不是新建) -> patch 会整块跳过, 导致 sched.h include 找不到头文件。
+  # 这里从 ace6 分支预取该文件的原始(pre-image)版本; 补丁自带该文件时跳过。
+  _creates_hmbird_h=0
+  if grep -A2 '^diff --git a/include/linux/sched/hmbird.h' "$PATCH_FILE" | grep -q '^new file mode'; then
+    _creates_hmbird_h=1
+  fi
+  if [ ! -f include/linux/sched/hmbird.h ] && [ "$_creates_hmbird_h" = "0" ]; then
+    mkdir -p include/linux/sched
+    curl -fsSL --retry 3 -o include/linux/sched/hmbird.h \
+      "https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8750/oneplus/sm8750_b_16.0.0_ace_6/include/linux/sched/hmbird.h" \
+      || die "预取 include/linux/sched/hmbird.h 失败"
+    echo "    已预取 include/linux/sched/hmbird.h ($(wc -l < include/linux/sched/hmbird.h) 行)"
+  fi
 
   # 风驰以 hmbird 取代 AOSP sched_ext, 基线必须是带 SLIM_SCHED/SCHED_CLASS_EXT 的树
   grep -q '^CONFIG_SCHED_CLASS_EXT=y' arch/arm64/configs/gki_defconfig \
@@ -178,14 +266,29 @@ if [ "$APPLY_FENGCHI" = "1" ]; then
     if [ "$REJ" != "0" ]; then
       echo "    ---- 冲突文件 ----"
       find . -name '*.rej' -not -path './.git/*' | sed 's/^/    /'
-      die "风驰补丁有 $REJ 个文件冲突 (.rej), 需要人工处理"
+      # 6.6.30 等历史基线的上下文漂移: 用脚本逐处修正后清除 rej
+      if [ -f "$REPO_ROOT/scripts/fengchi_6630_fixup.js" ] && [ -n "$KERNEL_REF" ] && [ -z "$FENGCHI_PATCH_URL" ]; then
+        log "检测到历史基线, 执行风驰补丁修正 (fengchi_6630_fixup.js)"
+        node "$REPO_ROOT/scripts/fengchi_6630_fixup.js" "$PWD" || warn "修正脚本返回非 0"
+        find . -name '*.rej' -not -path './.git/*' -delete
+        REJ="$(find . -name '*.rej' -not -path './.git/*' | wc -l)"
+        echo "    修正后剩余 rej: $REJ"
+        APPLIED=1
+      fi
+      if [ "$REJ" != "0" ]; then
+        die "风驰补丁有 $REJ 个文件冲突 (.rej), 需要人工处理"
+      fi
     fi
   fi
   [ "$APPLIED" = "1" ] || die "风驰补丁无法应用"
 
   # 结构校验: hmbird 实现必须在, AOSP sched_ext 必须已被移除
   [ -f kernel/sched/hmbird/hmbird.c ] || die "缺少 kernel/sched/hmbird/hmbird.c, 风驰补丁不完整"
-  [ -f include/linux/sched/sched_ext.h ] || die "缺少 include/linux/sched/sched_ext.h"
+  # include/linux/sched/sched_ext.h 只在部分树(如 ace_6)里存在, 13s/13t 等树本来就没有,
+  # 不能当硬条件 —— 真正要保证的是 ext.c/ext.h 已被移除(下面两行)。
+  if [ -f include/linux/sched/sched_ext.h ]; then
+    echo "    include/linux/sched/sched_ext.h 仍在 (该树自带, 不阻断)"
+  fi
   [ -f kernel/sched/ext.c ] && die "AOSP kernel/sched/ext.c 仍在"
   [ -f include/linux/sched/ext.h ] && die "AOSP include/linux/sched/ext.h 仍在"
 
@@ -201,18 +304,67 @@ else
   warn "APPLY_FENGCHI=0 -> 不打风驰补丁 (将保留 AOSP sched_ext, 无 HMBIRD/风驰)"
 fi
 
-# --------------------------- 3. 集成 FolkSU ----------------------------------
+# --------------------------- 3. 集成 FinaSU ----------------------------------
 if [ "$APPLY_KSU" = "1" ]; then
-log "集成 FolkSU 内核侧代码 (tag $FOLKSU_TAG)"
+log "集成 FinaSU 内核侧代码 (tag $KSU_TAG)"
 KSU_DIR="$PWD/KernelSU"
 if [ ! -d "$KSU_DIR/.git" ]; then
   rm -rf "$KSU_DIR"
   # 需要完整历史: kernel/Kbuild 用 rev-list --count HEAD 计算 KSU_VERSION
-  git clone --quiet "$FOLKSU_REPO" "$KSU_DIR"
+  git clone --quiet "$KSU_REPO" "$KSU_DIR"
 fi
 git -C "$KSU_DIR" fetch --tags --quiet 2>/dev/null || true
-git -C "$KSU_DIR" checkout --quiet "$FOLKSU_TAG" 2>/dev/null \
-  || warn "无法切到 $FOLKSU_TAG, 使用默认分支"
+git -C "$KSU_DIR" checkout --quiet "$KSU_TAG" 2>/dev/null \
+  || warn "无法切到 $KSU_TAG, 使用默认分支"
+
+# 修掉音量键安全模式的误触发:
+# 原逻辑 if (val) 会把"按住产生的自动重复(val==2)"也当成一次按下, 按住约 1 秒
+# 就能凑出十几个计数(阈值只要 3) -> 没按也会自己进安全模式。
+# 改成只统计首次按下(val==1) 且仅开机后 60 秒内采样。
+if [ -f "$REPO_ROOT/scripts/ksu_safe_mode_fixup.js" ]; then
+  log "修正音量键安全模式误触发 (只计首次按下, 限开机 60 秒内)"
+  node "$REPO_ROOT/scripts/ksu_safe_mode_fixup.js" "$KSU_DIR" \
+    || die "音量键安全模式修正失败"
+fi
+
+# 版本串尾巴: 默认是 v1.2.1-<sha>@HEAD (detached 检出时 rev-parse --abbrev-ref 返回 HEAD)。
+# 改成 @三叶, 便于一眼确认是自己编的包。
+# ---------------------------------------------------------------------------
+# SELinux 时序对齐 (Duck Detector: APP_ZYGOTE_ATTR_TIMING)
+#   FinaSU my_setprocattr() 里, 以 '\n' 开头的 payload 走短路跳过
+#   security_context_to_sid_with_policy(), 而普通非法 context 会走一次解析;
+#   两者最终都返回 EINVAL, 但耗时差 ~100ns -> 探针判 POSITIVE -> SELinux DANGER。
+#   这里让两条路都做同一次解析(同一个失败路径), 行为不变、只对齐耗时。
+# ---------------------------------------------------------------------------
+if [ -f "$KSU_DIR/kernel/feature/selinux_hide.c" ]; then
+  log "对齐 SELinux setprocattr 时序 (去掉前导换行短路)"
+  python3 - "$KSU_DIR/kernel/feature/selinux_hide.c" <<'PYFIX'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = "if (size && str[0] && str[0] != '\\n') {"
+new = "if (size && str[0]) { /* timing-equalized: 前导换行也走同一解析路径 */"
+if old not in s:
+    sys.stderr.write("pattern not found in selinux_hide.c\n")
+    sys.exit(1)
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+print("patched selinux_hide.c")
+PYFIX
+  grep -q "timing-equalized" "$KSU_DIR/kernel/feature/selinux_hide.c" \
+    || die "selinux_hide.c 时序补丁失败"
+fi
+
+KSU_KBUILD="$KSU_DIR/kernel/Kbuild"
+if [ -f "$KSU_KBUILD" ]; then
+  if grep -q '^KSU_VERSION_FULL :=' "$KSU_KBUILD"; then
+    sed -i 's|^KSU_VERSION_FULL := .*|KSU_VERSION_FULL := v$(if $(KSU_VERSION_TAG),$(KSU_VERSION_TAG),unknown)-$(KSU_VERSION_SHA)@三叶|' "$KSU_KBUILD"
+    grep -q '@三叶' "$KSU_KBUILD" || die 'KSU_VERSION_FULL 改写失败'
+    echo "    KernelSU 版本串已改为 ...@三叶"
+  else
+    warn "Kbuild 里没有 KSU_VERSION_FULL, 跳过"
+  fi
+fi
+
 KSU_COMMITS="$(git -C "$KSU_DIR" rev-list --count HEAD)"
 KSU_VERSION="$((30000 + KSU_COMMITS))"
 
@@ -222,7 +374,8 @@ grep -qxF '/drivers/kernelsu' .git/info/exclude 2>/dev/null || echo '/drivers/ke
 
 # kernel/include/uapi -> ../../uapi, 在该布局下解析到 KernelSU/uapi
 [ -L KernelSU/kernel/include/uapi ] || ln -sfn ../../uapi KernelSU/kernel/include/uapi
-[ -f KernelSU/kernel/include/uapi/supercall.h ] || die "FolkSU uapi 布局异常"
+[ -f KernelSU/uapi/supercall.h ] || [ -f KernelSU/kernel/include/uapi/supercall.h ] \
+  || die "FinaSU uapi 布局异常 (既无 uapi/supercall.h 也无 kernel/include/uapi/supercall.h)"
 
 # 与 KernelSU 官方 setup.sh 完全相同的接入方式
 ln -sfn ../KernelSU/kernel drivers/kernelsu
@@ -231,9 +384,9 @@ grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig \
   || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
 KSU_UAPI="$(sed -n 's/.*KERNEL_SU_UAPI_VERSION *= *\([0-9]\+\).*/\1/p' KernelSU/uapi/supercall.h | head -1)"
-[ "$KSU_UAPI" = "5" ] || die "FolkSU UAPI=$KSU_UAPI, 与管理器 (uapi: 5) 不匹配"
+[ "$KSU_UAPI" = "6" ] || die "FinaSU UAPI=$KSU_UAPI, 与管理器 (FinaSU 1.0.4, uapi: 6) 不匹配"
 [ "$KSU_VERSION" = "$KSU_EXPECTED_VERSION" ] \
-  || die "KSU_VERSION=$KSU_VERSION != 期望 $KSU_EXPECTED_VERSION (检查 FOLKSU_TAG 是否与管理器 APK 版本对应)"
+  || die "KSU_VERSION=$KSU_VERSION != 期望 $KSU_EXPECTED_VERSION (检查 KSU_TAG 是否与管理器 APK 版本对应)"
 echo "    KERNEL_SU_UAPI_VERSION = $KSU_UAPI"
 echo "    KSU_VERSION = $KSU_VERSION   (管理器 APK 为 $KSU_EXPECTED_VERSION)"
 echo "    受信任管理器证书: size=$KSU_EXPECTED_SIZE sha256=${KSU_EXPECTED_HASH:0:16}..."
@@ -265,10 +418,21 @@ fi
 # --------------------------- 4. 锁定内核版本后缀 ------------------------------
 log "锁定内核版本后缀: $LOCALVERSION_SUFFIX"
 sed -i "s|^CONFIG_LOCALVERSION=.*|CONFIG_LOCALVERSION=\"${LOCALVERSION_SUFFIX}\"|" "$CFGFILE"
-if grep -q '^CONFIG_LOCALVERSION_AUTO=' "$CFGFILE"; then
-  sed -i 's|^CONFIG_LOCALVERSION_AUTO=.*|CONFIG_LOCALVERSION_AUTO=n|' "$CFGFILE"
+if [ "$KEEP_LOCALVERSION_AUTO" = "1" ]; then
+  # 出厂内核是 AUTO=y (CONFIG_MODULE_SCMVERSION / 动态 task_struct 都依赖它),
+  # 这里保留 y, 版本串会多出 -g<sha>/-dirty 后缀(仅是观感, modversions 下不参与匹配)
+  if grep -q '^CONFIG_LOCALVERSION_AUTO=' "$CFGFILE"; then
+    sed -i 's|^CONFIG_LOCALVERSION_AUTO=.*|CONFIG_LOCALVERSION_AUTO=y|' "$CFGFILE"
+  else
+    echo 'CONFIG_LOCALVERSION_AUTO=y' >> "$CFGFILE"
+  fi
+  echo "    保留 LOCALVERSION_AUTO=y (为了 MODULE_SCMVERSION / 动态 task_struct)"
 else
-  echo 'CONFIG_LOCALVERSION_AUTO=n' >> "$CFGFILE"
+  if grep -q '^CONFIG_LOCALVERSION_AUTO=' "$CFGFILE"; then
+    sed -i 's|^CONFIG_LOCALVERSION_AUTO=.*|CONFIG_LOCALVERSION_AUTO=n|' "$CFGFILE"
+  else
+    echo 'CONFIG_LOCALVERSION_AUTO=n' >> "$CFGFILE"
+  fi
 fi
 # 去掉 setlocalversion 末尾的 ${scm_version}, 避免 -dirty/+ 污染 vermagic
 sed -i 's/\${scm_version}//' scripts/setlocalversion
@@ -288,7 +452,7 @@ fi
 
 # --------------------------- 5. SuSFS (默认关闭) -----------------------------
 # 严格 fail-fast 集成, 逻辑见 scripts/apply_susfs.sh:
-#   * 内核侧: susfs4ksu 官方 gki-android15-6.6 补丁 (要求零 fuzz, 否则直接失败)
+#   * 内核侧: susfs4ksu gki-android15-6.6 补丁 (SUSFS v2.3.0, 在 ace_6 树上 0 reject)
 #   * KSU 侧 : 自包含适配层 kernel/feature/susfs_adapter.c
 #              (上游 10_enable_susfs_for_ksu.patch 是给老版 KernelSU 写的,
 #               与 FolkSU/FinaSU 当前结构代差过大, 不用)
@@ -305,9 +469,147 @@ if [ "$APPLY_SUSFS" = "1" ]; then
   }
   [ -f "$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch" ] \
     || die "susfs4ksu 缺少 6.6 内核补丁"
+
+  # 锁定/记录上游提交与版本 (SUSFS 上游不升版本号时, 只能靠 commit 复现)
+  if [ -n "$SUSFS_REF" ]; then
+    git -C "$SUSFS_DIR" fetch --depth=1 origin "$SUSFS_REF" >/dev/null 2>&1 \
+      && git -C "$SUSFS_DIR" checkout -q FETCH_HEAD 2>/dev/null \
+      && echo "    已切到指定提交: $SUSFS_REF" \
+      || warn "切换到 $SUSFS_REF 失败, 使用分支默认 HEAD"
+  fi
+  SUSFS_COMMIT="$(git -C "$SUSFS_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  SUSFS_VER="$(sed -n 's/.*SUSFS_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' "$SUSFS_DIR/kernel_patches/include/linux/susfs.h" 2>/dev/null | head -1)"
+  echo "    SUSFS 版本: ${SUSFS_VER:-unknown}  提交: $SUSFS_COMMIT"
   bash "$REPO_ROOT/scripts/apply_susfs.sh" "$SUSFS_DIR" "$CFGFILE" \
     || die "SUSFS 集成失败 (见上方 [susfs] 输出)"
   SUSFS_APPLIED=1
+  # ---- 参考 KowSU: setprocattr 只做预校验, 不自己 commit_creds ----
+  # 现象: 管理器打开「隐藏 SELinux 修改」后开机卡第二屏 (整机冻住).
+  # 原因: FinaSU 的 my_setprocattr() 会对 uid>=10000 的进程直接
+  #       prepare_creds()/commit_creds() 换 SID; 开机早期这样改凭据会把系统带死.
+  # 参考内核 (KowSU 35801, 6.6.150 sun GKI) 的做法:
+  #       备份策略校验通过后, 永远交回 stock selinux_setprocattr, 不自己改凭据.
+  log "setprocattr 对齐参考内核 (只校验, 不改凭据)"
+  python3 - "$KSU_DIR" <<'PYSETPROC'
+import sys
+ksu = sys.argv[1]
+p = ksu + "/kernel/feature/selinux_hide.c"
+s = open(p, encoding='utf-8').read()
+start = s.find("    new = prepare_creds();")
+end_marker = "abort_change:\n    abort_creds(new);\n    return error;"
+end = s.find(end_marker, start)
+if start < 0 or end < 0:
+    sys.stderr.write("selinux_hide.c: 未找到待替换块\n")
+    sys.exit(1)
+end += len(end_marker)
+s = s[:start] + "    /* delegate: 不在这里改凭据, 交给 stock selinux_setprocattr */\n    return 0;" + s[end:]
+s = s.replace("    struct ksu_task_security_struct *tsec;\n", "")
+s = s.replace("    struct cred *new;\n", "")
+s = s.replace("u32 mysid, sid = 0, backup_sid, ptsid;", "u32 mysid, sid = 0, backup_sid;")
+open(p, "w", encoding='utf-8').write(s)
+print("patched selinux_hide.c (delegate)")
+
+h = "security/selinux/hooks.c"
+c = open(h, encoding='utf-8').read()
+old = """	if ((likely(!strcmp(name, "current") &&
+				current_uid().val >= 10000 &&
+				ksu_selinux_hide_running)))
+		return my_setprocattr(name, value, size);"""
+new = """	if ((likely(!strcmp(name, "current") &&
+				current_uid().val >= 10000 &&
+				ksu_selinux_hide_running))) {
+		int __del = my_setprocattr(name, value, size);
+		if (__del)
+			return __del;
+	}"""
+if old not in c:
+    sys.stderr.write("hooks.c: 未找到 handle_selinux_setprocattr 片段\n")
+    sys.exit(1)
+c = c.replace(old, new, 1)
+open(h, "w", encoding='utf-8').write(c)
+print("patched hooks.c (delegate)")
+PYSETPROC
+  grep -q "delegate: 不在这里改凭据" "$KSU_DIR/kernel/feature/selinux_hide.c" \
+    || die "setprocattr delegate 补丁未生效 (selinux_hide.c)"
+  grep -q "__del" security/selinux/hooks.c \
+    || die "setprocattr delegate 补丁未生效 (hooks.c)"
+
+
+  # ---- 两边都不认时交回 stock: 恢复 A/B 的结构性耗时差 ----
+  # Duck Detector 的 APP_ZYGOTE_ATTR_TIMING 只在 median(A-B) > 0 时判 Danger。
+  # "timing-equalized" 之后 A/B 都停在"解析失败即返回"这一处, 差值趋近 0,
+  # 512 对取中位数后符号由噪声决定 -> 一次 POSITIVE(Danger) 一次 All Clear。
+  # 修法: 只有 backup 不认、live 认(需要掩盖类型存在)时就地 EINVAL;
+  #       两边都不认时返回 0, 让 hooks.c 落到 stock, 由 stock 自己失败
+  #       (A 在解析处早退, B 走 prepare_creds/abort_creds) —— 差值回到
+  #       stock 的微秒级、方向固定为负, 不再由噪声定符号。
+  log "setprocattr: 两边都不认时交回 stock (恢复 A/B 结构差)"
+  python3 - "$KSU_DIR" <<'PYSTOCKDLG'
+import sys
+p = sys.argv[1] + "/kernel/feature/selinux_hide.c"
+s = open(p, encoding='utf-8').read()
+old = """        if (backup_error || error)
+            return backup_error ?: error;"""
+new = """        if (backup_error || error) {
+            /* 两边都不认: stock 对同样的载荷也是 -EINVAL。返回 0 交给 stock,
+             * 让它走完自己的路径, 保持 stock 的结构性耗时差。
+             * 仅 backup 不认、live 认时才就地 -EINVAL, 掩盖该类型存在。 */
+            if (backup_error && error) {
+                if (stripped_nl) {
+                    str[size] = '\\n';
+                    size++;
+                }
+                return 0;
+            }
+            return backup_error ?: error;
+        }"""
+if old not in s:
+    sys.stderr.write("selinux_hide.c: 未找到 backup_error 返回块\n")
+    sys.exit(1)
+s = s.replace(old, new, 1)
+s = s.replace("""        if (str[size - 1] == '\\n') {
+            str[size - 1] = 0;
+            size--;
+        }""", """        if (str[size - 1] == '\\n') {
+            str[size - 1] = 0;
+            size--;
+            stripped_nl = 1;
+        }""", 1)
+s = s.replace("""    int error, backup_error;""", """    int error, backup_error;
+    int stripped_nl = 0;""", 1)
+open(p, 'w', encoding='utf-8').write(s)
+print("patched selinux_hide.c (stock-delegate)")
+PYSTOCKDLG
+  grep -q "stock 对同样的载荷也是 -EINVAL" "$KSU_DIR/kernel/feature/selinux_hide.c" \
+    || die "selinux_hide stock-delegate 补丁失败"
+
+  # boot_completed 兜底再启用一次 SELinux 隐藏:
+  #   backup_sepolicy 可能晚于 post-fs-data 才就绪(-EAGAIN), 或者管理器里
+  #   「隐藏 SELinux 修改」开关没开 -> running 一直 false -> SUSFS 的钩子全部走原路径
+  #   -> 春秋报「检测到可疑 SELinux Policy」。这一步不依赖用户开关。
+  # 可用 extra_config="#SELINUX_EXTRA=0" 关掉下面三个附加补丁 (排障用: 回到
+  # 只有「三处保留 + FinaSU 去 static」的最小配置, 也就是 Ace6 已验证能开机的状态)
+  SELINUX_EXTRA=1
+  case "$EXTRA_CONFIG" in *"#SELINUX_EXTRA=0"*) SELINUX_EXTRA=0;; esac
+  if [ "$SELINUX_EXTRA" = "1" ]; then
+    # boot_completed 兜底启用 SELinux 隐藏
+    node "$REPO_ROOT/scripts/selinux_force_enable.js" \
+      || die "SELinux 兜底启用补丁失败"
+    # 去掉 SUSFS 查询钩子上的 current_uid().val >= 10000
+    node "$REPO_ROOT/scripts/selinux_all_uids.js" \
+      || die "SELinux 全 uid 生效补丁失败"
+    # 归一化 fake status 页 (sequence/policyload=1)
+    node "$REPO_ROOT/scripts/selinux_fake_status.js" \
+      || die "SELinux 假状态页归一化失败"
+  else
+    warn "SELinux 附加补丁已关闭 (SELINUX_EXTRA=0): 仅保留三处 SUSFS 改动 + FinaSU 去 static"
+  fi
+  # app 侧 attr/current 写入交回原厂 selinux_setprocattr:
+  # Duck 的 "App Zygote attr/current timing (experimental)" 会量 A/B 两条写入路径的耗时差,
+  # FinaSU 用 backup_sepolicy 解析会比原厂 live 策略多出几十~一百多纳秒 -> 被判 Positive -> SELinux 红。
+  node "$REPO_ROOT/scripts/selinux_setprocattr_stock.js" \
+    || die "SELinux setprocattr 原厂回退补丁失败"
+
 else
   warn "APPLY_SUSFS=0 -> 不集成 SuSFS"
   SUSFS_APPLIED=0
@@ -493,6 +795,35 @@ if [ "$APPLY_BBG" = "1" ]; then
   grep -q '^CONFIG_BBG=y' out/.config || die "CONFIG_BBG 没被打开 (检查 security/baseband-guard/Kconfig)"
 fi
 
+# --------------------------- 6.5 额外配置覆盖 (调试对照用) -------------------
+# EXTRA_CONFIG: 空格分隔的 CONFIG 覆盖项, 例:
+#   CONFIG_HIBERNATION=n CONFIG_PM_USERSPACE_AUTOSLEEP=n CONFIG_PAGE_BLOCK_ORDER=9
+# 只改 .config 里写死的值, 依赖关系交给随后的 olddefconfig 收拾, 不碰任何源码。
+if [ -n "$EXTRA_CONFIG" ]; then
+  log "额外配置覆盖: $EXTRA_CONFIG"
+  _ec_changed=0
+  for item in $EXTRA_CONFIG; do
+    sym="${item%%=*}"; val="${item#*=}"
+    case "$sym" in
+      CONFIG_*) ;;
+      *) warn "跳过非 CONFIG 项: $item"; continue ;;
+    esac
+    name="${sym#CONFIG_}"
+    case "$val" in
+      n|N) scripts/config --file out/.config --disable "$name"; _ec_changed=1 ;;
+      y|Y) scripts/config --file out/.config --enable  "$name"; _ec_changed=1 ;;
+      m|M) scripts/config --file out/.config --module  "$name"; _ec_changed=1 ;;
+      ''|*[!0-9xXa-fA-F]*) scripts/config --file out/.config --set-str "$name" "${val%\"}"; _ec_changed=1 ;;
+      *)   scripts/config --file out/.config --set-val "$name" "$val"; _ec_changed=1 ;;
+    esac
+    echo "    $sym=$val"
+  done
+  if [ "$_ec_changed" = "1" ]; then
+    log "  olddefconfig 收拾依赖关系"
+    make "${MAKE_ARGS[@]}" olddefconfig
+  fi
+fi
+
 # 关键配置校验 (调度的判断要"树无关":
 #   公开 b_* 分支是 CONFIG_SCHED_CLASS_EXT, 完整 v_* 厂商树是原装 CONFIG_HMBIRD_SCHED)
 if grep -q '^CONFIG_HMBIRD_SCHED=y' out/.config; then
@@ -531,6 +862,33 @@ done
   || die "配置里 CONFIG_HMBIRD_SCHED=y 但镜像里找不到 hmbird_sched, 风驰没编进去"; \
   grep -aq 'hmbird_sched' "$IMAGE" && echo "    ✅ 风驰(HMBIRD) 符号确认存在"; }
 
+# ---------------- SELinux 隐藏 出厂校验 (硬性) ----------------
+# SUSFS=1 时, 内核里必须真的有 SUSFS 的 SELinux 隐藏钩子。少一处, 管理器里开
+# "隐藏 SELinux 修改"也不会生效 -> 春秋报「检测到可疑SELinux」。
+SELINUX_HIDE_APPLIED=0
+if [ "${SUSFS_APPLIED}" = "1" ]; then
+  for spec in \
+    "security/selinux/avc.c:susfs_is_avc_log_spoofing_enabled" \
+    "security/selinux/hooks.c:handle_selinux_setprocattr" \
+    "security/selinux/selinuxfs.c:handle_sel_write_access" \
+    "security/selinux/selinuxfs.c:handle_sel_write_context"; do
+    _f="${spec%%:*}"; _p="${spec#*:}"
+    grep -q "$_p" "$_f" || die "SUSFS=1 但 $_f 没有 $_p —— SELinux 隐藏缺失, 拒绝出包"
+  done
+  SELINUX_HIDE_APPLIED=1
+  # 符号级复核: 静态函数也在 System.map 里, 且 write_op[] 取了地址不会被内联掉
+  _NM=""
+  for c in out/System.map System.map "$WORKDIR/out/System.map"; do [ -f "$c" ] && { _NM="$c"; break; }; done
+  if [ -n "$_NM" ]; then
+    for sym in handle_sel_write_access handle_sel_write_context handle_selinux_setprocattr my_write_access; do
+      grep -q " $sym$" "$_NM" || die "System.map 里找不到 $sym —— SELinux 隐藏钩子没编进去"
+    done
+    echo "    ✅ SELinux 隐藏钩子符号确认存在 ($_NM)"
+  else
+    warn "没有 System.map, 跳过 SELinux 钩子的符号级复核 (源码级校验已通过)"
+  fi
+fi
+
 mkdir -p "$WORKDIR/out"
 cp "$IMAGE" "$WORKDIR/out/Image"
 {
@@ -538,14 +896,20 @@ cp "$IMAGE" "$WORKDIR/out/Image"
   echo "UTS_RELEASE=$(cat out/include/config/kernel.release 2>/dev/null || cat include/config/kernel.release 2>/dev/null || echo unknown)"
   echo "KERNEL_REPO=$KERNEL_REPO"
   echo "KERNEL_BRANCH=$KERNEL_BRANCH"
+  echo "KERNEL_REF=${KERNEL_REF:-}"
   echo "KERNEL_SOURCE_HEAD=$SRC_HEAD"
-  echo "FOLKSU_TAG=$FOLKSU_TAG"
+  echo "FINASU_REPO=$KSU_REPO"
+  echo "FINASU_TAG=$KSU_TAG"
   echo "KSU_VERSION=${KSU_VERSION:-N/A (未集成 KernelSU)}"
   echo "KSU_UAPI=${KSU_UAPI:-N/A (未集成 KernelSU)}"
   echo "KSU_EXPECTED_SIZE=$KSU_EXPECTED_SIZE"
   echo "KSU_EXPECTED_HASH=$KSU_EXPECTED_HASH"
   echo "FENGCHI=$APPLY_FENGCHI"
   echo "SUSFS=$SUSFS_APPLIED"
+  echo "SELINUX_HIDE=${SELINUX_HIDE_APPLIED}"
+  echo "UNICODE_BYPASS_FIX=${UNICODE_FIX_APPLIED:-0}"
+  echo "SUSFS_VERSION=${SUSFS_VER:-}"
+  echo "SUSFS_COMMIT=${SUSFS_COMMIT:-}"
   echo "BUILT_AT=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 } | tee "$WORKDIR/out/build-info.txt"
 
